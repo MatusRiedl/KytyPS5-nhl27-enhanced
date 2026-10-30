@@ -49,8 +49,6 @@ compared here; see Known issues.
 - A fresh folder compiles shaders during the first arena load. On the test PC that took about 30 s of 2-29 fps,
   but its GPU driver shader cache was already warm, so expect longer on a new PC. After that load the first
   match ran like later ones. Later boots pre-warm the shaders (`KYTY_SHADER_PREGEN`, on by default).
-- Purple glowing eyes (seen once, earlier build): not reproduced in about 140 captured frames of menus,
-  intros, close-ups and gameplay. Please report the scene if you see it.
 - The upstream known bugs (jersey cloth, some skin tones, facial hair, bright pixels, logos) are unchanged.
 
 ## Credits
