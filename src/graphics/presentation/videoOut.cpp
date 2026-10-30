@@ -864,14 +864,14 @@ static std::atomic<int> g_requested_flip_rate {0};
 // KYTY_MENU_VBLANK_HZ=<hz>: while the game asks for 30 or 20 Hz (menus, the pause menu,
 // presentation scenes) the emulated display runs at this rate, so those screens are not held to
 // 60 fps (flips go out at every vblank, see VideoOutSetFlipRate). KYTY_PLAY_VBLANK_HZ=<hz>: the
-// same while it asks for 60 Hz (play). Both 240 by default, so neither is held to 60 fps (NHL 27
-// times its game by the clock: nothing runs faster at more frames); 0 = the configured vblank
-// frequency. The game is not told of a faster display (its 120 Hz output mode follows the
+// same while it asks for 60 Hz (play). Both 0 by default = the configured vblank frequency (60 Hz),
+// so menus hold a steady 30 fps and play a steady 60 fps; 240 lets either run uncapped (NHL 27
+// times its game by the clock: nothing runs faster at more frames, but uncapped fps swings 50-120). The game is not told of a faster display (its 120 Hz output mode follows the
 // configured one).
 static uint32_t VblankHzFromEnv(const char* name) {
 	const char* value = std::getenv(name);
 	return value != nullptr ? static_cast<uint32_t>(std::clamp<unsigned long>(std::strtoul(value, nullptr, 10), 0ul, 1000ul))
-	                        : 240u;
+	                        : 0u;
 }
 static uint32_t MenuVblankHz() {
 	static const uint32_t hz = VblankHzFromEnv("KYTY_MENU_VBLANK_HZ");
@@ -1504,12 +1504,12 @@ KYTY_SYSV_ABI int VideoOutSetFlipRate(int handle, int rate) {
 	if (rate < 0 || rate > 2) {
 		return VIDEO_OUT_ERROR_INVALID_VALUE;
 	}
-	// Flips go out at every vblank: NHL 27 asks for 30 Hz in menus, the pause menu and
-	// presentation scenes, which then run at up to 60 fps (Petr prefers it). KYTY_FORCE_FLIP_RATE
-	// =<0-2> forces that rate instead, =off keeps the game's.
+	// The game's rate is kept by default: NHL 27 asks for 30 Hz in menus, the pause menu and
+	// presentation scenes and 60 Hz in play, which gives even frame pacing. KYTY_FORCE_FLIP_RATE
+	// =<0-2> forces that rate instead (=0: flips at every vblank, menus up to 60 fps).
 	static const int forced_rate = [] {
 		const char* value = std::getenv("KYTY_FORCE_FLIP_RATE");
-		if (value == nullptr) return 0;
+		if (value == nullptr) return -1;
 		return value[0] >= '0' && value[0] <= '2' ? value[0] - '0' : -1;
 	}();
 	const int requested = rate;
