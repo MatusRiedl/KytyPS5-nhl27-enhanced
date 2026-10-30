@@ -118,6 +118,134 @@ bool PerfStatsEnabled() {
 	return g_perf_stats_enabled;
 }
 
+// NHL27RDSPLIT: where a guest thread's ReadMemory goes, summed over guest threads, reads and writes apart.
+// hop: queued until the GPU thread takes the urgent command. lambda: the GPU thread's part, which holds
+// finish (pending guest reads that overlap), copy (DownloadBufferMemory) and flush. back: GPU thread done
+// until the guest thread runs. retry: waits for an unfinished writer. wait: the async read's tick and its
+// publish. hop2, pub: the second round trip of an async read.
+enum RdSplitPart : size_t { RdHop, RdLambda, RdFinish, RdCopy, RdFlush, RdBack, RdRetry, RdWait, RdHop2, RdPub, RdParts };
+
+struct RdSplitTrace {
+	uint64_t ns[RdParts] {};
+	uint64_t entered     = 0;
+	uint64_t left        = 0;
+	uint64_t bytes       = 0;
+	bool     downloaded  = false;
+	bool     writer_done = false;
+};
+
+struct RdSplitStat {
+	std::atomic<uint64_t> ns[RdParts] {};
+	std::atomic<uint64_t> n {0};
+	std::atomic<uint64_t> downloads {0};
+	std::atomic<uint64_t> writer_done {0};
+	std::atomic<uint64_t> bytes {0};
+	std::atomic<uint64_t> total_ns {0};
+};
+RdSplitStat           g_rd_split[2]; // read, write
+std::atomic<uint64_t> g_rd_publish_n {0};
+std::atomic<uint64_t> g_rd_publish_ns {0};
+
+// GPU-written bytes: per tick without repeats, the volume an eager write-back would copy, and raw by source.
+struct RdSplitWrites {
+	std::mutex lock;
+	RangeSet   open;
+	uint64_t   open_tick   = 0;
+	uint64_t   write_ticks = 0;
+	uint64_t   unique      = 0;
+	uint64_t   bound       = 0;
+	uint64_t   parsed      = 0;
+};
+RdSplitWrites g_rd_writes;
+
+void RdSplitNoteWrite(uint64_t tick, uint64_t vaddr, uint64_t size, bool parsed) {
+	auto&       w = g_rd_writes;
+	std::unique_lock lock(w.lock);
+	if (tick != w.open_tick) {
+		w.open.ForEach([&](uint64_t begin, uint64_t end) { w.unique += end - begin; });
+		w.open.Clear();
+		w.open_tick = tick;
+		w.write_ticks++;
+	}
+	w.open.Add(vaddr, size);
+	(parsed ? w.parsed : w.bound) += size;
+}
+
+// Adds the time since its construction to one part of a trace.
+class RdSplitSpan {
+public:
+	RdSplitSpan(RdSplitTrace& trace, RdSplitPart part, bool enabled)
+	    : m_slot(enabled ? &trace.ns[part] : nullptr), m_start(enabled ? FrameBreakdown::NowNs() : 0) {}
+	~RdSplitSpan() {
+		if (m_slot != nullptr) {
+			*m_slot += FrameBreakdown::NowNs() - m_start;
+		}
+	}
+	RdSplitSpan(const RdSplitSpan&)            = delete;
+	RdSplitSpan& operator=(const RdSplitSpan&) = delete;
+
+private:
+	uint64_t* m_slot;
+	uint64_t  m_start;
+};
+
+// Stamps the moment a lambda is left, on every way out.
+struct RdSplitLeave {
+	uint64_t* left;
+	~RdSplitLeave() {
+		if (left != nullptr) {
+			*left = FrameBreakdown::NowNs();
+		}
+	}
+};
+
+void RdSplitCommit(const RdSplitTrace& trace, bool is_write, uint64_t total_ns) {
+	auto& stat = g_rd_split[is_write ? 1 : 0];
+	for (size_t i = 0; i < RdParts; ++i) {
+		stat.ns[i].fetch_add(trace.ns[i], std::memory_order_relaxed);
+	}
+	stat.n.fetch_add(1, std::memory_order_relaxed);
+	stat.downloads.fetch_add(trace.downloaded ? 1 : 0, std::memory_order_relaxed);
+	stat.writer_done.fetch_add(trace.writer_done ? 1 : 0, std::memory_order_relaxed);
+	stat.bytes.fetch_add(trace.bytes, std::memory_order_relaxed);
+	stat.total_ns.fetch_add(total_ns, std::memory_order_relaxed);
+}
+
+void RdSplitPrint(uint64_t flips, uint64_t tick) {
+	static const char* const kinds[2] = {"read", "write"};
+	for (size_t kind = 0; kind < 2; ++kind) {
+		auto& stat = g_rd_split[kind];
+		double ms[RdParts] {};
+		for (size_t i = 0; i < RdParts; ++i) {
+			ms[i] = static_cast<double>(stat.ns[i].exchange(0, std::memory_order_relaxed)) / 1e6;
+		}
+		std::printf("NHL27RDSPLIT: %s n=%llu dl=%llu writer_done=%llu MiB=%.1f total_ms=%.1f hop=%.1f lambda=%.1f "
+		            "finish=%.1f copy=%.1f flush=%.1f back=%.1f retry=%.1f wait=%.1f hop2=%.1f pub=%.1f\n",
+		            kinds[kind], static_cast<unsigned long long>(stat.n.exchange(0, std::memory_order_relaxed)),
+		            static_cast<unsigned long long>(stat.downloads.exchange(0, std::memory_order_relaxed)),
+		            static_cast<unsigned long long>(stat.writer_done.exchange(0, std::memory_order_relaxed)),
+		            static_cast<double>(stat.bytes.exchange(0, std::memory_order_relaxed)) / (1024.0 * 1024.0),
+		            static_cast<double>(stat.total_ns.exchange(0, std::memory_order_relaxed)) / 1e6, ms[RdHop],
+		            ms[RdLambda], ms[RdFinish], ms[RdCopy], ms[RdFlush], ms[RdBack], ms[RdRetry], ms[RdWait],
+		            ms[RdHop2], ms[RdPub]);
+	}
+	static uint64_t last_tick = 0;
+	auto&           w         = g_rd_writes;
+	std::unique_lock lock(w.lock);
+	std::printf("NHL27RDSPLIT: gpu_writes flips=%llu ticks=%llu write_ticks=%llu unique_MiB=%.1f bound_MiB=%.1f "
+	            "parsed_MiB=%.1f publish_n=%llu publish_ms=%.1f\n",
+	            static_cast<unsigned long long>(flips), static_cast<unsigned long long>(tick - last_tick),
+	            static_cast<unsigned long long>(w.write_ticks), static_cast<double>(w.unique) / (1024.0 * 1024.0),
+	            static_cast<double>(w.bound) / (1024.0 * 1024.0), static_cast<double>(w.parsed) / (1024.0 * 1024.0),
+	            static_cast<unsigned long long>(g_rd_publish_n.exchange(0, std::memory_order_relaxed)),
+	            static_cast<double>(g_rd_publish_ns.exchange(0, std::memory_order_relaxed)) / 1e6);
+	last_tick     = tick;
+	w.write_ticks = 0;
+	w.unique      = 0;
+	w.bound       = 0;
+	w.parsed      = 0;
+}
+
 std::pair<Buffer*, uint64_t> UploadMemory(GraphicContext& graphics, CommandScheduler& scheduler,
                                         StreamBuffer& staging, uint64_t size, uint64_t alignment,
                                         vk::BufferUsageFlags usage, const auto& write) {
@@ -359,6 +487,7 @@ void BufferCache::PerfMaybePrint() {
 		            static_cast<unsigned long long>(cpu_count), cpu_ms);
 	}
 	g_fault_pages.clear();
+	RdSplitPrint(events[static_cast<size_t>(PerfEvent::Flip)], m_scheduler.CurrentTick());
 	std::fflush(stdout);
 }
 
@@ -1057,6 +1186,7 @@ bool BufferCache::DownloadBufferMemory(Buffer& buffer, uint64_t vaddr, uint64_t 
 	}
 	auto publish = [this, mapped, offset, total_size, buffer_address, copies = copies, unmap_sequence,
 	                owner = std::move(temporary), snapshot = std::move(snapshot)]() mutable {
+		const auto publish_start = async && PerfStatsEnabled() ? FrameBreakdown::NowNs() : 0;
 		(owner ? *owner : m_download_buffer).Invalidate(offset, total_size);
 		uint64_t at = 0;
 		for (const auto& copy: copies) {
@@ -1099,6 +1229,10 @@ bool BufferCache::DownloadBufferMemory(Buffer& buffer, uint64_t vaddr, uint64_t 
 				    }
 			    });
 			at += copy.size;
+		}
+		if (publish_start != 0) {
+			g_rd_publish_n.fetch_add(1, std::memory_order_relaxed);
+			g_rd_publish_ns.fetch_add(FrameBreakdown::NowNs() - publish_start, std::memory_order_relaxed);
 		}
 	};
 	ReadbackWaitNote wait_note;
@@ -1739,21 +1873,32 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 	uint64_t       async_tick = 0;
 	const uint64_t fault_rip = on_gpu ? static_cast<uint64_t>(g_write_tag)
 	                                : g_fault_rip != 0 ? g_fault_rip : static_cast<uint64_t>(WriteTag::Count);
+	const bool     split       = PerfStatsEnabled() && !on_gpu;
+	const uint64_t split_start = split ? FrameBreakdown::NowNs() : 0;
+	RdSplitTrace   trace;
 	// A guest thread's download whose writer the GPU has not finished comes back with the writer's
 	// tick instead: the guest thread waits for it here while the execution thread goes on, then
 	// asks again (AbPending3: the execution thread waits). Waits for unfinished writers were 7 ms
 	// each, 4% of the execution thread in play.
 	for (uint32_t attempt = 0;; ++attempt) {
-		uint64_t retry_tick = 0;
+		uint64_t       retry_tick = 0;
+		const uint64_t split_sent = split ? FrameBreakdown::NowNs() : 0;
 		m_scheduler.Context().GetGpu().SendUrgentCommandSync([this, vaddr, size, is_write, caller, on_gpu, tid,
-		                                                      fault_rip, origin, &async_tick, attempt, &retry_tick] {
+		                                                      fault_rip, origin, &async_tick, attempt, &retry_tick,
+		                                                      split, &trace] {
+			const RdSplitLeave split_leave {split ? &trace.left : nullptr};
+			trace.entered = split ? FrameBreakdown::NowNs() : 0;
 			if (!m_pending_guest_reads.empty()) {
+				RdSplitSpan span(trace, RdFinish, split);
 				FinishPendingGuestReads(vaddr, size);
 			}
 			if (is_write && !IsRegionRegistered(vaddr, size)) {
 				return;
 			}
 			auto& buffer = m_slot_buffers[FindBuffer(vaddr, size)];
+			if (split && attempt == 0) {
+				trace.writer_done = buffer.last_write_tick == 0 || m_scheduler.IsFree(buffer.last_write_tick);
+			}
 			if (!is_write && !on_gpu && Common::Experiments::Enabled(Common::Experiments::AsyncGuestReads)) {
 				// The download covers whole tracker pages; so does the pending record. The bytes it
 				// carries are the GPU-written ones of those pages.
@@ -1770,11 +1915,20 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 					m_pending_read_ranges.Add(first, last - first);
 					PublishGpuRangesVersion();
 				}
-				if (DownloadBufferMemory<true>(buffer, vaddr, size)) {
+				const bool async_downloaded = [&] {
+					RdSplitSpan span(trace, RdCopy, split);
+					return DownloadBufferMemory<true>(buffer, vaddr, size);
+				}();
+				if (async_downloaded) {
+					trace.downloaded = true;
+					trace.bytes      = m_last_download_bytes;
 					async_tick       = m_scheduler.CurrentTick();
 					m_pending_guest_reads.push_back({first, last - first, async_tick, std::move(bytes)});
 					g_scheduler_flush_sites[2].fetch_add(1, std::memory_order_relaxed);
-					m_scheduler.Flush();
+					{
+						RdSplitSpan span(trace, RdFlush, split);
+						m_scheduler.Flush();
+					}
 					Common::Timeline::Mark("async-guest-read", vaddr);
 				} else {
 					m_pending_guest_read_count.fetch_sub(1, std::memory_order_release);
@@ -1869,8 +2023,15 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 			const auto gpu_write_start = gpu_write_debug ? std::chrono::steady_clock::now()
 			                                             : std::chrono::steady_clock::time_point {};
 			const auto gpu_write_tick  = buffer.last_write_tick;
-			const bool downloaded = lazy ? DownloadBufferMemory<true, true>(buffer, vaddr, size)
-			                             : DownloadBufferMemory<false>(buffer, download_vaddr, download_size);
+			const bool downloaded = [&] {
+				RdSplitSpan span(trace, RdCopy, split);
+				return lazy ? DownloadBufferMemory<true, true>(buffer, vaddr, size)
+				            : DownloadBufferMemory<false>(buffer, download_vaddr, download_size);
+			}();
+			if (downloaded) {
+				trace.downloaded = true;
+				trace.bytes += m_last_download_bytes;
+			}
 			if (gpu_write_debug && downloaded) {
 				const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
 				                                                           gpu_write_start).count();
@@ -1966,16 +2127,37 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 				m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
 			}
 		});
+		if (split) {
+			trace.ns[RdHop] += trace.entered - split_sent;
+			trace.ns[RdLambda] += trace.left - trace.entered;
+			trace.ns[RdBack] += FrameBreakdown::NowNs() - trace.left;
+		}
 		if (retry_tick == 0) {
 			break;
 		}
+		RdSplitSpan span(trace, RdRetry, split);
 		m_scheduler.WaitSubmitted(retry_tick);
 		m_scheduler.GetMasterSemaphore().Wait(retry_tick);
 	}
 	if (async_tick != 0) {
-		m_scheduler.WaitPriorityOperations(async_tick);
-		m_scheduler.Context().GetGpu().SendUrgentCommandSync(
-		    [this, vaddr, size] { FinishPendingGuestReads(vaddr, size); });
+		{
+			RdSplitSpan span(trace, RdWait, split);
+			m_scheduler.WaitPriorityOperations(async_tick);
+		}
+		const uint64_t split_sent = split ? FrameBreakdown::NowNs() : 0;
+		m_scheduler.Context().GetGpu().SendUrgentCommandSync([this, vaddr, size, split, &trace] {
+			const RdSplitLeave split_leave {split ? &trace.left : nullptr};
+			trace.entered = split ? FrameBreakdown::NowNs() : 0;
+			FinishPendingGuestReads(vaddr, size);
+		});
+		if (split) {
+			trace.ns[RdHop2] += trace.entered - split_sent;
+			trace.ns[RdPub] += trace.left - trace.entered;
+			trace.ns[RdBack] += FrameBreakdown::NowNs() - trace.left;
+		}
+	}
+	if (split) {
+		RdSplitCommit(trace, is_write, FrameBreakdown::NowNs() - split_start);
 	}
 }
 
@@ -2449,6 +2631,7 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
 		RangeTicks::Note(vaddr, size, buffer.last_write_tick);
 		if (PerfStatsEnabled()) {
 			LogGpuWrite(vaddr, size);
+			RdSplitNoteWrite(buffer.last_write_tick, vaddr, size, false);
 		}
 		if (FrameDump::TraceEnabled()) {
 			FrameDump::TraceWrite("buffer-write", vaddr, vaddr + size, m_writer_kind, m_writer_hash);
@@ -3125,6 +3308,9 @@ void BufferCache::NoteGpuWrites(uint64_t vaddr, uint64_t size) {
 			    const auto first = std::max(page, start);
 			    const auto last  = std::min(page + bytes, finish);
 			    RangeTicks::Note(first, last - first, m_scheduler.CurrentTick());
+			    if (PerfStatsEnabled()) {
+				    RdSplitNoteWrite(m_scheduler.CurrentTick(), first, last - first, true);
+			    }
 			    {
 				    std::unique_lock ranges_lock(m_gpu_ranges_mutex);
 				    m_gpu_modified_ranges.Add(first, last - first);
