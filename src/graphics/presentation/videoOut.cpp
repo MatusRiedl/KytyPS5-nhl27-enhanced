@@ -203,6 +203,8 @@ struct VideoOutConfig {
 	int                                 flip_rate   = 0;
 	// The rate the game asked for (flip_rate is the one flips use, see VideoOutSetFlipRate).
 	int                                 requested_flip_rate = 0;
+	// vblank_status.count at the last completed flip (late flips, see IsFlipDueLocked).
+	uint64_t                            last_flip_vblank    = 0;
 	uint64_t                            output_mode = VIDEO_OUT_OUTPUT_MODE_DEFAULT;
 	float                               gamma       = 1.0f;
 	VideoOutFlipStatus                  flip_status;
@@ -517,8 +519,19 @@ static bool IsFlipDueLocked(const VideoOutConfig& cfg, uint64_t generation) {
 		return false;
 	}
 	const int interval = cfg.flip_rate + 1;
-
-	return interval <= 1 || (cfg.vblank_status.count % static_cast<uint64_t>(interval)) == 0;
+	if (interval <= 1) {
+		return true;
+	}
+	// A frame that misses its vblank flips on the next one once <interval> vblanks have passed since the
+	// last flip (50 ms at 30 Hz), instead of waiting for the next multiple (66 ms). KYTY_LATE_FLIP=0: old way.
+	static const bool late_flip = [] {
+		const char* value = std::getenv("KYTY_LATE_FLIP");
+		return value == nullptr || value[0] != '0';
+	}();
+	if (late_flip) {
+		return cfg.vblank_status.count - cfg.last_flip_vblank >= static_cast<uint64_t>(interval);
+	}
+	return (cfg.vblank_status.count % static_cast<uint64_t>(interval)) == 0;
 }
 
 static bool IsValidBufferIndex(int index) {
@@ -1392,6 +1405,7 @@ bool FlipQueue::Flip(uint32_t micros) {
 		}
 		auto& r = *it;
 		r.cfg->flip_status.count++;
+		r.cfg->last_flip_vblank                     = r.cfg->vblank_status.count;
 		r.cfg->flip_status.processTime              = LibKernel::KernelGetProcessTime();
 		r.cfg->flip_status.processTimeCounter       = LibKernel::KernelGetProcessTimeCounter();
 		r.cfg->flip_status.submitProcessTimeCounter = r.submit_ptc;
