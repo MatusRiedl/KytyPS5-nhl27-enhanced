@@ -33,3 +33,21 @@ of each build, same switches).
 
 Do not enable `KYTY_PERF_STATS` while recording: its timers run millions of times per second
 and would make their own code look hot.
+
+## clang 19 profile (nhl27-enhanced)
+
+`nhl27-clang19.profdata` is the same kind of profile recorded with the clang-cl 19.1.5 that ships with Visual
+Studio 2022 Build Tools, so a PGO build needs no separate LLVM install. Recorded on a Ryzen 7 9800X3D +
+RTX 5080 with `-DKYTY_ARCH_AVX2=ON`: boot excluded via `pgo.reset`, then menus, versus screen, arena intro
+(30 Hz scenes) and about 4 minutes of a CPU vs CPU Play Now match, `KYTY_PERF_STATS=0`.
+
+```
+cmake -S . -B _Build/pgo -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DKYTY_ARCH_AVX2=ON ^
+  -DKYTY_PGO=use -DKYTY_PGO_PROFILE=%CD%/tools/pgo/nhl27-clang19.profdata -DKYTY_PGO_PROFILE_COMPILER=19.1.5
+```
+
+Measured against the same source without PGO/AVX2 (same machine, scripted 15-minute match): GPU-thread time
+per draw or dispatch 2.88 vs 3.21-3.29 us in gameplay frames (-10%), 3.14 vs 3.35-3.51 us in the 30 Hz
+crowd scenes (-6%); gameplay 1% low 48.7 vs 44.9 fps. The build needs an AVX2 CPU (Intel Haswell / AMD Zen
+or newer).
