@@ -1,10 +1,10 @@
-# KytyPS5-nhl27-enhanced (release candidate 1) - DRAFT, review before sharing
+# KytyPS5-nhl27-enhanced (release candidate 2) - DRAFT, review before sharing
 
 > Draft notes prepared with AI help. The fork's "AI Use" rule says text you post must come from you, so
 > rewrite or confirm these notes in your own words before you publish them.
 
 A build of duy64/KytyPS5-nhl (release a917829, branch `opt/nhl27-fixes`) for NHL 27 (PPSA34063) with
-steadier frame pacing and a faster PGO build. Source code (GPL-2.0): `KytyPS5-nhl27-enhanced-rc1-src.zip`,
+steadier frame pacing and a faster PGO build. Source code (GPL-2.0): `KytyPS5-nhl27-enhanced-rc2-src.zip`,
 shipped next to this build (git branch `nhl27-enhanced`). Commits after a917829:
 
 - `dc04d4a9` videoOut: the game's own flip rate at a 60 Hz vblank is now the default (menus and cut-scenes
@@ -15,6 +15,9 @@ shipped next to this build (git branch `nhl27-enhanced`). Commits after a917829:
   `NHL27HITCH` for each frame over 50 ms).
 - `b8867192` PGO profile recorded with the clang-cl 19.1.5 that ships with VS 2022 Build Tools
   (`tools/pgo/nhl27-clang19.profdata`), built with `-DKYTY_ARCH_AVX2=ON`. Build line: `tools/pgo/README.md`.
+- `3616c580` videoOut: at the 30 Hz flip rate, a frame that misses its vblank now shows on the next vblank
+  (50 ms) instead of the next even one (66 ms). In a 15-minute match the 62-72 ms hitches in 30 Hz scenes fell
+  from 222 to 23 (most became 50 ms); gameplay unchanged. `KYTY_LATE_FLIP=0` restores the old behaviour.
 - `cfgGlobal.json`: `KYTY_PERF_STATS` set to `0` (its timers cost time and print to the console constantly).
 
 ## Measured (Ryzen 7 9800X3D, RTX 5080, scripted 15-minute CPU vs CPU Play Now match)
@@ -38,7 +41,8 @@ compared here; see Known issues.
 
 ## Known issues
 
-- Heavy 30 Hz cut-scenes (arena intro, some replays) can still drop to 15-25 fps for a few seconds.
+- Heavy 30 Hz cut-scenes (arena intro, some replays) can still drop to 20-25 fps for a few seconds
+  (about 600 frames over 34 ms in a 15-minute match; the misses are now mostly 50 ms rather than 66 ms).
   The cause is guest memory faults on GPU-written pages, not GPU speed; that path is unchanged.
 - A fresh folder compiles shaders during the first arena load. On the test PC that took about 30 s of 2-29 fps,
   but its GPU driver shader cache was already warm, so expect longer on a new PC. After that load the first
