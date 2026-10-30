@@ -5,6 +5,7 @@
 #include "common/assert.h"
 #include "common/emulatorConfig.h"
 #include "common/logging/log.h"
+#include "graphics/presentation/systemOverlay.h"
 #include "libs/controller.h"
 
 #include <algorithm>
@@ -144,7 +145,8 @@ constexpr uint64_t         CURSOR_IDLE_HIDE_MS    = 2000;
 
 // Opt-in test input, processed on the SDL thread alongside physical input.
 struct ScriptedInput {
-	struct Command { SDL_Keycode key; uint32_t duration; };
+	// text set: type it into the system text dialog. overlay_key: send the key to that dialog, not the pad.
+	struct Command { SDL_Keycode key; uint32_t duration; std::string text; bool overlay_key = false; };
 	std::string path;
 	std::vector<Command> commands;
 	size_t next = 0;
@@ -177,6 +179,14 @@ void PollScriptedInput() {
 			std::string name;
 			int duration = 150;
 			if (!(fields >> name)) continue;
+			if (name == "text" || name == "imekey") {
+				std::string value;
+				if (!(fields >> value)) continue;
+				const auto key = name == "imekey" ? SDL_GetKeyFromName(value.c_str()) : SDLK_UNKNOWN;
+				if (name == "imekey" && key == SDLK_UNKNOWN) continue;
+				input.commands.push_back({key, 150, name == "text" ? value : std::string {}, name == "imekey"});
+				continue;
+			}
 			fields >> duration;
 			const auto key = name == "sleep" ? SDLK_UNKNOWN : SDL_GetKeyFromName(name.c_str());
 			if (name != "sleep" && key == SDLK_UNKNOWN) continue;
@@ -189,7 +199,21 @@ void PollScriptedInput() {
 	if (input.next < input.commands.size()) {
 		const auto command = input.commands[input.next++];
 		input.deadline = now + command.duration;
-		if (command.key != SDLK_UNKNOWN) {
+		if (!command.text.empty() || command.overlay_key) {
+			SDL_Event event {};
+			if (command.overlay_key) {
+				event.type         = SDL_EVENT_KEY_DOWN;
+				event.key.key      = command.key;
+				event.key.scancode = SDL_GetScancodeFromKey(command.key, nullptr);
+			} else {
+				event.type      = SDL_EVENT_TEXT_INPUT;
+				event.text.text = command.text.c_str();
+			}
+			const bool taken = ProcessSystemOverlayInput(event);
+			std::printf("InputFile: overlay %s taken=%d\n",
+			            command.overlay_key ? SDL_GetKeyName(command.key) : command.text.c_str(), taken ? 1 : 0);
+			std::fflush(stdout);
+		} else if (command.key != SDLK_UNKNOWN) {
 			input.pressed = command.key;
 			std::printf("InputFile: press %s (%u ms)\n", SDL_GetKeyName(command.key), command.duration);
 			std::fflush(stdout);
