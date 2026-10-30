@@ -16,8 +16,10 @@ shipped next to this build (git branch `nhl27-enhanced`). Commits after a917829:
 - `b8867192` PGO profile recorded with the clang-cl 19.1.5 that ships with VS 2022 Build Tools
   (`tools/pgo/nhl27-clang19.profdata`), built with `-DKYTY_ARCH_AVX2=ON`. Build line: `tools/pgo/README.md`.
 - `3616c580` videoOut: at the 30 Hz flip rate, a frame that misses its vblank now shows on the next vblank
-  (50 ms) instead of the next even one (66 ms). In a 15-minute match the 62-72 ms hitches in 30 Hz scenes fell
-  from 222 to 23 (most became 50 ms); gameplay unchanged. `KYTY_LATE_FLIP=0` restores the old behaviour.
+  (50 ms) instead of the next even one (66 ms). Paired 15-minute matches, same exe, off vs on: time lost to
+  missed vblanks in 30 Hz scenes 142 -> 67 ms per 5 s (-53%), frames over 40 ms 362 -> 276; gameplay no worse.
+  `KYTY_LATE_FLIP=0` restores the old behaviour.
+- swapchain: `NHL27HITCH` now from 40 ms; `NHL27FRAMETIME` adds `over40=` and `miss_ms=`.
 - `cfgGlobal.json`: `KYTY_PERF_STATS` set to `0` (its timers cost time and print to the console constantly).
 
 ## Measured (Ryzen 7 9800X3D, RTX 5080, scripted 15-minute CPU vs CPU Play Now match)
