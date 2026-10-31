@@ -43,6 +43,10 @@ namespace BcAlias {
 void Resolve(TextureCache& cache, ImageId cached, ImageId merged);
 } // namespace BcAlias
 
+// P14 diagnostic: true the first time this log line sees (address, width, width).
+[[nodiscard]] bool NoteExtentPairOnce(const char* line, uint64_t address, uint32_t width_a,
+                                      uint32_t width_b);
+
 class TextureCache {
 public:
 	enum class BindingType : uint8_t { Texture, Storage, RenderTarget, DepthTarget, VideoOut };

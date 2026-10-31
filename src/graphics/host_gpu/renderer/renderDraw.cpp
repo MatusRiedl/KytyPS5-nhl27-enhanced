@@ -743,6 +743,22 @@ void RenderExecutor::StoreRenderTargetMemo(const RenderColorInfo* colors, uint32
 // writers fill from the front and its readers read only up to resources_num and buffers_num:
 // restore the entries its last use filled and the members after the arrays (value-initializing
 // all of it for every draw resolution wrote 1.5 GB/s; resolve thread -9% busy in play).
+// P14 diagnostic: an attachment smaller than the render area built from its desc is a GPU fault.
+static void NoteAttachmentMismatch(const char* prefix, uint64_t tick, uint64_t address, uint32_t desc_width,
+                                   uint32_t desc_height, const vk::Extent3D& image_extent,
+                                   uint32_t base_level, uint32_t area_width, uint32_t area_height) {
+	const auto image_width  = std::max(image_extent.width >> base_level, 1u);
+	const auto image_height = std::max(image_extent.height >> base_level, 1u);
+	if ((image_width == desc_width && image_height == desc_height) ||
+	    !NoteExtentPairOnce(prefix, address, desc_width, image_width)) {
+		return;
+	}
+	std::printf("%s: tick=%llu addr=0x%llx desc=%ux%u image=%ux%u base_level=%u area=%ux%u\n", prefix,
+	            static_cast<unsigned long long>(tick), static_cast<unsigned long long>(address),
+	            desc_width, desc_height, image_width, image_height, base_level, area_width, area_height);
+	std::fflush(stdout);
+}
+
 static void ResetVertexInputInfo(ShaderVertexInputInfo& info) {
 	static_assert(std::is_trivially_copyable_v<ShaderVertexInputInfo>);
 	static const ShaderVertexInputInfo defaults {};
@@ -1012,6 +1028,10 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		color_views[i]        = image_view;
 		auto&      image      = cache.GetImage(target.image_id);
 		EXIT_IF(image.backing.samples != target.desc.info.samples || image_view == nullptr);
+		NoteAttachmentMismatch("NHL27RTMISMATCH", m_context.GetCommandScheduler().CurrentTick(),
+		                       target.desc.info.data.address, target.Extent().width,
+		                       target.Extent().height, image.info.extent,
+		                       target.desc.view_info.base_level, state.width, state.height);
 		const auto& view   = target.desc.view_info;
 		const auto  layout = image.binding.is_bound ? vk::ImageLayout::eGeneral
 		                                            : vk::ImageLayout::eColorAttachmentOptimal;
@@ -1089,6 +1109,10 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		}
 		auto& image = cache.GetImage(depth.image_id);
 		EXIT_IF(image_view == nullptr || image.backing.samples != depth.desc.info.samples);
+		NoteAttachmentMismatch("NHL27ZTMISMATCH", m_context.GetCommandScheduler().CurrentTick(),
+		                       depth.desc.info.data.address, depth.desc.info.extent.width,
+		                       depth.desc.info.extent.height, image.info.extent,
+		                       depth.desc.view_info.base_level, state.width, state.height);
 		const auto draw_writes = depth.AttachmentWriteAspects();
 		vk::ImageAspectFlags sampled_aspects;
 		for (const auto* stage: stages) {

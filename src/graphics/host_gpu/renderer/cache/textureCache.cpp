@@ -41,7 +41,22 @@
 
 namespace Libs::Graphics {
 
+bool NoteExtentPairOnce(const char* line, uint64_t address, uint32_t width_a, uint32_t width_b) {
+	static std::mutex                                                     mutex;
+	static std::set<std::tuple<const char*, uint64_t, uint32_t, uint32_t>> seen;
+	const std::scoped_lock                                                lock(mutex);
+	return seen.size() < 4096 && seen.emplace(line, address, width_a, width_b).second;
+}
+
 namespace {
+
+[[nodiscard]] bool DepthGrowRecreate() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_DEPTH_GROW_RECREATE");
+		return value == nullptr || value[0] != '0';
+	}();
+	return enabled;
+}
 
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 // Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
@@ -1012,6 +1027,8 @@ bool TextureCache::DepthOverlapNeedsRecreate(const ImageInfo& requested, Binding
 		case BindingType::DepthTarget:
 			recreate |= !cached.info.IsDepth();
 			recreate |= cached.info.IsDepth() && !(stencil_match && bpp_match);
+			// The render area follows the request, so a narrower image would be drawn past its edge.
+			recreate |= DepthGrowRecreate() && cached.info.extent.width < requested.extent.width;
 			break;
 		case BindingType::VideoOut: recreate |= cached.info.IsDepth(); break;
 	}
@@ -1049,8 +1066,29 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested, BindingTyp
 	    !requested.HasStencil() && !cached.info.HasStencil() && !requested.HasMetadata() &&
 	    (cached.info.metadata.kind == ImageMetadataKind::None ||
 	     cached.info.metadata.kind == ImageMetadataKind::Htile);
+	const bool extent_differs = requested.extent != cached.info.extent;
 	if (!DepthOverlapNeedsRecreate(requested, binding, cached)) {
+		if (extent_differs && NoteExtentPairOnce("reuse", requested.data.address, requested.extent.width,
+		                                         cached.info.extent.width)) {
+			std::printf("NHL27DEPTHREUSE: addr=0x%llx req=%ux%u pitch=%u cached=%ux%u pitch=%u binding=%d\n",
+			            static_cast<unsigned long long>(requested.data.address), requested.extent.width,
+			            requested.extent.height, requested.pitch, cached.info.extent.width,
+			            cached.info.extent.height, cached.info.pitch, static_cast<int>(binding));
+			std::fflush(stdout);
+		}
 		return cached_id;
+	}
+	if (extent_differs && binding == BindingType::DepthTarget && cached.info.IsDepth()) {
+		static std::atomic<uint64_t> grows {0};
+		const auto                   grow = grows.fetch_add(1, std::memory_order_relaxed) + 1;
+		if (NoteExtentPairOnce("grow", requested.data.address, requested.extent.width, cached.info.extent.width) ||
+		    (grow & (grow - 1)) == 0) {
+			std::printf("NHL27DEPTHGROW: addr=0x%llx req=%ux%u cached=%ux%u n=%llu\n",
+			            static_cast<unsigned long long>(requested.data.address), requested.extent.width,
+			            requested.extent.height, cached.info.extent.width, cached.info.extent.height,
+			            static_cast<unsigned long long>(grow));
+			std::fflush(stdout);
+		}
 	}
 	RefreshImage(cached_id);
 	auto info = requested;
