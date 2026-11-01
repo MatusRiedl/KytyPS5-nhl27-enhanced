@@ -40,6 +40,8 @@ arrow keys = D-pad, WASD = left stick, Enter = Options, Q / E = L1 / R1.
 
 - Windows 10 or 11, 64-bit, and your own dump of NHL 27.
 - A CPU with AVX2 (Intel Haswell / AMD Zen or newer). Without AVX2 the game won't start.
+- The latest Microsoft Visual C++ Redistributable (x64). If the emulator won't start and a window names `MSVCP140.dll`
+  or `VCRUNTIME140.dll`, install it from Microsoft.
 - About 14 GB of free RAM and 10 GB of video memory at 2560x1440, measured in a match.
 - A current GPU driver. Tested only on an RTX 5080 with driver 621.01, a Ryzen 7 9800X3D and 32 GB of RAM.
   Expect lower numbers on slower hardware. Other GPUs have not been tried.
