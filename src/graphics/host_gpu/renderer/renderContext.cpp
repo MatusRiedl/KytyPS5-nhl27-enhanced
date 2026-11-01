@@ -300,6 +300,9 @@ void RenderContext::UnmapMemory(uint64_t vaddr, uint64_t size) {
 		if (buffer_wait) {
 			drain = false;
 		}
+		if (images) {
+			m_texture_cache.NoteStillUnmap(vaddr, size, drain);
+		}
 		const auto start   = CpReadDebugEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point {};
 		const auto unmap_start = FrameBreakdown::Enabled() ? std::chrono::steady_clock::now()
 		                                                   : std::chrono::steady_clock::time_point {};
