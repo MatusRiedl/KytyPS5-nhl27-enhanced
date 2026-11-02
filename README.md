@@ -1,7 +1,6 @@
 # KytyPS5-nhl
 
-A private working fork of [KytyPS5](https://github.com/KytyPS5/KytyPS5) focused on getting **EA Sports NHL 27** (PPSA34063, v01.003.001) running well. NHL 26 is untested on this fork. The working branch
-is `cold`.
+A private working fork of [KytyPS5](https://github.com/KytyPS5/KytyPS5) focused on getting **EA Sports NHL 27** (PPSA34063, v01.003.001) running well. NHL 26 is untested on this fork. The working branch is `cold`.
 
 > [!IMPORTANT]
 > Not affiliated with Sony Interactive Entertainment, PlayStation or Electronic Arts. No game files or
@@ -55,8 +54,7 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
   - bounded `S_SETPC` jump tables;
   - loop cap for runaway lighting loops (38 ms → 1.7 ms per draw);
   - memoized exponential recursion in resource materialization.
-
-**GPU / renderer:**
+- **GPU / renderer:**
 - native indirect draws;
 - read-only buffer and BDA dirty caches;
 - program resource cache;
@@ -64,9 +62,9 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
 - D32 placeholders for depth-compare null slots;
 - BC6H storage-write redirect;
 - ignored LS/ES RSRC registers.
-**AMD driver crash:** Kyty's 3D detiler shader used an `OpSpecConstantOp Select` chain that crashes amdvlk.
+- **AMD driver crash:** Kyty's 3D detiler shader used an `OpSpecConstantOp Select` chain that crashes amdvlk.
   It is rewritten as if/return.
-**NHL 26 boot:** `param.json` missing from dumps (use `target-param.json`), and `--redzone` to stop host exception
+- **NHL 26 boot:** `param.json` missing from dumps (use `target-param.json`), and `--redzone` to stop host exception
   dispatch from clobbering the SysV red zone.
 - Be A Pro tessellation crash fixed (abort in LowerTessellationMemory replaced by a warning)
 - sceKernelGetModuleList2 implemented (fixes the NHL 27 boot crash on some machines)
@@ -201,8 +199,8 @@ A blank environment table keeps the shipped 0.6667. Values outside 0.25–1.0 ar
 
 - [KytyPS5](https://github.com/KytyPS5/KytyPS5) and the original [Kyty](https://github.com/InoriRus/Kyty).
 - Cryan ([GitColeS](https://github.com/GitColeS)): front-face lighting fix and testing.
-- Petr ([petrmolek](https://github.com/petrmolek)): Performance development
-- Toucann ([MrToucann](https://github.com/MrToucann)): Performance development
+- Petr ([petrmolek]https://github.com/petrmolek): Performance development
+- Toucann ([MrToucann]https://github.com/MrToucann): Performance development
 - AnyPS5 developers, for comparison data on the lighting defect.
 
 ## Building
@@ -285,7 +283,6 @@ needed:
 
 ```bash
 nix-shell # or: nix develop
-
 git submodule update --init --recursive
 
 cmake -S . -B _Build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
