@@ -54,23 +54,23 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
   - bounded `S_SETPC` jump tables;
   - loop cap for runaway lighting loops (38 ms → 1.7 ms per draw);
   - memoized exponential recursion in resource materialization.
-- **GPU / renderer:**
+-     **GPU / renderer:**
 - native indirect draws;
-- read-only buffer and BDA dirty caches;
-- program resource cache;
+-   read-only buffer and BDA dirty caches;
+-   program resource cache;
 - D16 depth sampled as R16;
-- D32 placeholders for depth-compare null slots;
-- BC6H storage-write redirect;
-- ignored LS/ES RSRC registers.
+-   D32 placeholders for depth-compare null slots;
+-   BC6H storage-write redirect;
+-   ignored LS/ES RSRC registers.
 - **AMD driver crash:** Kyty's 3D detiler shader used an `OpSpecConstantOp Select` chain that crashes amdvlk.
   It is rewritten as if/return.
 - **NHL 26 boot:** `param.json` missing from dumps (use `target-param.json`), and `--redzone` to stop host exception
   dispatch from clobbering the SysV red zone.
 - Be A Pro tessellation crash fixed (abort in LowerTessellationMemory replaced by a warning)
-- sceKernelGetModuleList2 implemented (fixes the NHL 27 boot crash on some machines)
-- Six experiment-bit collisions fixed (bits 38-43 remapped to 52-57)
-- Performance defaults enabled: LONG_BUFFER_GC_AGE, PM4_WRITE_DATA_FAST, READBACK_QUEUE, DIRECT_EOP_INTERRUPTS, SPARSE_BUFFER_GC, LAZY_SHARED_WRITES, FAULT_PAGE_READS, ASYNC_GUEST_READS, GPU_COLOR_CLEAR, BDA_DIRTY_REGIONS
-- Slint launcher kept
+-     sceKernelGetModuleList2 implemented (fixes the NHL 27 boot crash on some machines)
+-   Six experiment-bit collisions fixed (bits 38-43 remapped to 52-57)
+-   Performance defaults enabled: LONG_BUFFER_GC_AGE, PM4_WRITE_DATA_FAST, READBACK_QUEUE, DIRECT_EOP_INTERRUPTS, SPARSE_BUFFER_GC, LAZY_SHARED_WRITES, FAULT_PAGE_READS, ASYNC_GUEST_READS, GPU_COLOR_CLEAR, BDA_DIRTY_REGIONS
+-   Slint launcher kept
 <table align="center">
   <tr>
     <td align="center">
@@ -132,6 +132,7 @@ included a one-pixel luminance result with no download transfer, consistent with
 feedback. No shader brightness adjustment was needed.
 
 Recommended environment variables (all are needed for current performance and stability):
+
 ```
 KYTY_DBG_LOOP_CAP=1024
 KYTY_DBG_SKIP_BAD_SHADERS=1
@@ -149,6 +150,7 @@ KYTY_PERF_NO_SYNC_READBACK=1
 ```
 
 Performance switches measured on NHL 27 (`docs/claude-nhl27.md` has what each does):
+
 ```
 KYTY_READBACK_QUEUE=1
 KYTY_DIRECT_EOP_INTERRUPTS=1
