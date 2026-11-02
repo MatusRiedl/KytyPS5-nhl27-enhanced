@@ -1,26 +1,24 @@
 # KytyPS5-nhl
 
-A private working fork of [KytyPS5](https://github.com/KytyPS5/KytyPS5) focused on getting **EA Sports NHL 27** (PPSA34063, v01.003.001) running well. NHL 26 is untested on this fork. The working branch is `cold`.
+A private working fork of [KytyPS5](https://github.com/KytyPS5/KytyPS5) focused on getting **EA Sports NHL 27** (PPSA34063, v01.003.001) running well. NHL 26 is untested on this fork. The working branch
+is `cold`.
 
 > [!IMPORTANT]
 > Not affiliated with Sony Interactive Entertainment, PlayStation or Electronic Arts. No game files or
 > system software are distributed. Use only game files you have obtained legally.
 
-
 ## Build lines
-- `-main`: clean playable build for daily play- `-texcopy`: test build with the partial-overlap copy fix (v3); crash fix real, ice-glitch rate about the same as main
+- `-main`: clean playable build for daily play
+- `-texcopy`: test build with the partial-overlap copy fix (v3); crash fix real, ice-glitch rate about the same as main
 - `-launchupd`: launcher fix for updating the build you are running
 - `-tailfix`: parked Nov 1 — tail-safe kill-switch diagnostic for the one-time black-crowd event (Be A Pro team-select crash on that line unresolved)
 - `-ringbuf`: in flight — ring-buffer frame recorder (press F2 after a glitch to dump the ring)
 - `-depthcol`: in flight — depth-as-color copy test for the ice glitch
 Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix, -texmerge, -readback, -rebind) — their releases were deleted and no tester builds are made from this fork anymore; -indirect was cancelled and never released.
 
-
 *Development on this fork is AI-assisted; all changes are reviewed and tested in-game by the maintainer before release.*
 
-
 ## Status (2026-11-01)
-
 
 | | NHL 27 |
 |---|---|
@@ -31,9 +29,7 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
 | Commentary audio | Working (Opus multistream fix); some lines still garbled |
 | Save / profile | Working |
 
-
 ## Known bugs
-
 
 - **Jersey cloth glitches**
 - **Some skin tones look wrong in cut-scenes**
@@ -45,9 +41,7 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
 - Texture glitch: garbled / pixel-matrix ice and players, usually right after goals; HUD unaffected; main baseline 6-12 glitches per game; under investigation (depth-as-color test and ring-buffer recorder in flight)
 - GPU device-loss crash: tester 1 (RTX 4080) now plays clean on RC3 (3 Be A Pro games with sims, no crash) — that is an RC3 result, not a fix in this fork; no tester builds are made from this fork anymore
 
-
 ## Notable fixes in this fork
-
 
 - **Lighting (both games):** the pixel-shader front-face input now follows `SPI_BARYC_CNTL.FRONT_FACE_ALL_BITS`
   (integer 1/0 instead of float ±1). The lighting's `== 0` test never passed before, so direct light was
@@ -61,16 +55,17 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
   - bounded `S_SETPC` jump tables;
   - loop cap for runaway lighting loops (38 ms → 1.7 ms per draw);
   - memoized exponential recursion in resource materialization.
+
 **GPU / renderer:**
 - native indirect draws;
 - read-only buffer and BDA dirty caches;
 - program resource cache;
 - D16 depth sampled as R16;
 - D32 placeholders for depth-compare null slots;
-- BG6H storage-write redirect;
+- BC6H storage-write redirect;
 - ignored LS/ES RSRC registers.
 **AMD driver crash:** Kyty's 3D detiler shader used an `OpSpecConstantOp Select` chain that crashes amdvlk.
-   It is rewritten as if/return.
+  It is rewritten as if/return.
 **NHL 26 boot:** `param.json` missing from dumps (use `target-param.json`), and `--redzone` to stop host exception
   dispatch from clobbering the SysV red zone.
 - Be A Pro tessellation crash fixed (abort in LowerTessellationMemory replaced by a warning)
@@ -120,6 +115,7 @@ Retired Nov 1: the tester diagnostic lines (-crumb, -modlist, -texdiag, -texfix,
     </td>
   </tr>
 </table>
+
 ## Running NHL 27
 
 Build `kyty_emulator` (see the upstream build instructions below), then run:
@@ -129,7 +125,7 @@ kyty_emulator.exe --game "<path>\eboot.bin" --screen-width 1920 --screen-height 
 ```
 
 Enable `--readback-linear-images true` for NHL 27, including ONES mode. The option defaults to
-'false' in `src/common/emulatorConfig.h`. With readback disabled, ONES outdoor gameplay was severely
+`false` in `src/common/emulatorConfig.h`. With readback disabled, ONES outdoor gameplay was severely
 overexposed (almost entirely white), while regular arena gameplay appeared normal. Enabling it
 restored normal ONES lighting in a 1080p A/B test with the other settings unchanged.
 
@@ -180,17 +176,17 @@ Useful debug options:
 |---|---|
 | `KYTY_PERF_GPU_TIMING=1` | Per-shader GPU timing (`NHL27GPU` lines); slows the game |
 | `KYTY_DBG_FRAME_DUMP=1` | Press **F2** to dump the next frame to `captures/frame_N` (command list, image stats, buffers) |
-| `KYTY_DBG_TRACE_BUF_PS=<ps hashes>` | Also dump buffers, 3D images, SRT and push constants for those pixel shaders |
+| `KYTY_DBG_FRAME_DUMP_BUF_PS=<ps hashes>` | Also dump buffers, 3D images, SRT and push constants for those pixel shaders |
 | `KYTY_DBG_TRACE_CS=<cs hashes>` | Log bindings for those compute dispatches |
 | `KYTY_DBG_TRACE_WRITES=<addrs>` | Log GPU writes to those guest addresses |
-| `KYTY_DBG_DUMP_SHADERS=1` | Dump shader binaries and SPIR-V |
+| `KYTY_DBG_DUMP_SHADERS=<hashes>` | Dump shader binaries and SPIR-V |
 | `KYTY_DBG_SKIP_CS` / `KYTY_DBG_SKIP_PS=<hashes>` | Skip shaders, for A/B tests |
 | `KYTY_DBG_FORCE_SHADOW_COMPARE=always` | Force every depth-compare sampler to "lit" (diagnostic) |
 | `KYTY_DBG_DEPTH_ALIAS=1` (+`_ADDR=`) | Log depth/texture aliasing events |
 
 ### Resolution scaling
 
-Render resolution is the Frostbite 4K preset multiplied by `KYTY_NHL_RES_SCALE` (0.25-1.0). The shipped configuration sets 0.6667 (about 1440p). Set it in the launcher environment table (Advanced tab), then Save and relaunch:
+Render resolution is the Frostbite 4K preset multiplied by `KYTY_NHL_RES_SCALE` (0.25–1.0). The shipped configuration sets 0.6667 (about 1440p). Set it in the launcher environment table (Advanced tab), then Save and relaunch:
 
 | `KYTY_NHL_RES_SCALE` | Internal resolution |
 |---|---|
@@ -199,7 +195,7 @@ Render resolution is the Frostbite 4K preset multiplied by `KYTY_NHL_RES_SCALE` 
 | 0.5 | 1080p |
 | 0.3333 | 720p |
 
-A blank environment table keeps the shipped 0.6667. Values outside 0.25-1.0 are ignored. The launcher's Screen resolution setting only changes the output window, not the render resolution.
+A blank environment table keeps the shipped 0.6667. Values outside 0.25–1.0 are ignored. The launcher's Screen resolution setting only changes the output window, not the render resolution.
 
 ## Credits
 
@@ -240,7 +236,7 @@ build has no working audio or gamepad hotplug support:
 sudo apt-get install --no-install-recommends \
   clang lld ninja-build cmake git glslang-tools python3 pkg-config \
   libgl1-mesa-dev libx11-dev libxcursor-dev libxext-dev libxfixes-dev \
-  libx11-dev libxrandr-dev libxss-dev libxtst-dev libxkbcommon-dev \
+  libxi-dev libxrandr-dev libxss-dev libxtst-dev libxkbcommon-dev \
   libasound2-dev libpulse-dev libudev-dev libdbus-1-dev libwayland-dev wayland-protocols
 ```
 
@@ -298,6 +294,7 @@ cmake -S . -B _Build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build _Build/linux --target launcher --parallel
 cmake --install _Build/linux --prefix _Build/linux/install
 ```
+
 The configure step downloads the FFmpeg prebuilts and the `xbyak`, `zydis`, `zstd`, and ZArchive
 sources, so it needs network access; a fully sandboxed `nix build` would require vendoring those
 inputs. A Vulkan 1.3 driver must be available at runtime (on NixOS,
@@ -326,7 +323,7 @@ sudo dnf install -y \
   wayland-devel wayland-protocols-devel qt6-qtbase-devel
 ```
 
-From the repository root, follow the download configure, build and install steps in
+From the repository root, follow the launcher configure, build and install steps in
 [Building on Linux](#building-on-linux), omitting `-DCMAKE_PREFIX_PATH="$Qt6_DIR"`; CMake finds
 Fedora's packaged Qt 6 automatically.
 
@@ -356,6 +353,7 @@ Requirements:
 
 ```bash
 git submodule update --init --recursive
+
 cmake -S . -B _Build/macos -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES=x86_64 \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
@@ -399,7 +397,7 @@ Use `_Build/linux` instead of `_Build/windows` for a Linux build.
 
 A ready-made Visual Studio Code setup is included in [`.vscode`](.vscode). It configures CMake
 Tools to build the project with Ninja and `clang-cl` and provides launch profiles for both
-`kyty_launcher.exe` and `kyty_emulator.exe`. It is Windows-only; VS Code settings cannot select a
+`kyty_launcher.exe` and `kyty_emulator.exe`. It is Windows-only: VS Code settings cannot select a
 compiler per platform, so on Linux configure from the command line as shown above.
 
 Before using it:
@@ -415,6 +413,7 @@ Before using it:
 ## Running
 
 Update your graphics driver before reporting rendering problems.
+
 To use the graphical launcher:
 
 ```powershell
@@ -472,6 +471,7 @@ Run `kyty_emulator --help` to see the available graphics, logging, validation, p
 debugging options.
 
 ### AI Use
+
 AI tools may be used for research, reverse engineering, and development assistance. Contributors
 must fully understand, review, and test all code they submit and remain responsible for its
 correctness. Repository communication, including pull-request descriptions, code comments, and
