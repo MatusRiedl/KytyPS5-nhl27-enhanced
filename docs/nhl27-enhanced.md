@@ -34,7 +34,7 @@ folder. If your profile shows "Sign in required", press OK.
 arrow keys = D-pad, WASD = left stick, Enter = Options, Q / E = L1 / R1.
 
 **Resolution:** set `screen_resolution` in `cfgGlobal.json` to `R1280X720`, `R1920X1080`, `R2560X1440` (default) or
-`R3840X2160`. Set `fullscreen_enabled` to `true` for fullscreen. Fullscreen and other resolutions are untested here.
+`R3840X2160`. Set `fullscreen_enabled` to `true` for fullscreen. Fullscreen ran fine at 2560x1440 in one short session. Other resolutions are untested here.
 
 ## Requirements
 
