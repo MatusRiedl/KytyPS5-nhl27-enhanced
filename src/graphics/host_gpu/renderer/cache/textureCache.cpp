@@ -458,6 +458,17 @@ bool AliasWritebackEnabled() {
 	return enabled;
 }
 
+// KYTY_OVERLAP_MERGE_COPY=1: a partial overlap that reaches the ResolveOverlap tail with a prior
+// resolution copies the cached image into the merged one instead of dropping its texels (the merged
+// image would sample stale or uninitialized memory there). Off by default.
+bool OverlapMergeCopyEnabled() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_OVERLAP_MERGE_COPY");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
 // The size class of the Be a Pro stills (P8), which the game encodes to PNG on the CPU.
 constexpr uint64_t LargeLinearReadbackTexels = 100000;
 
@@ -1267,6 +1278,31 @@ void Resolve(TextureCache& cache, ImageId cached_id, ImageId merged_id) {
 
 } // namespace BcAlias
 
+bool OverlapSafeToDelete(uint64_t current_tick, uint64_t tick_accessed_last,
+                         uint32_t heap_refs) noexcept {
+	return current_tick - std::min(current_tick, tick_accessed_last) > NumFramesBeforeRemoval &&
+	       heap_refs == 0u;
+}
+
+OverlapPlan PlanOverlapCopy(const ImageInfo& requested, const ImageInfo& cached,
+                            bool merged_present, bool speculative, bool safe_to_delete) {
+	// The same direct-copy test as TextureCache::CopyImage, so the copy never takes the buffer path.
+	const bool direct_copy =
+	    requested.pixel_format == cached.pixel_format ||
+	    (!requested.IsDepth() && !cached.IsDepth() &&
+	     vk::blockSize(requested.pixel_format) == vk::blockSize(cached.pixel_format));
+	const bool guards_except_base = merged_present && !speculative && safe_to_delete &&
+	                                requested.samples == cached.samples &&
+	                                requested.GetColorTransform() == cached.GetColorTransform() &&
+	                                requested.type == cached.type && direct_copy;
+	OverlapPlan plan;
+	plan.fix_eligible = guards_except_base && requested.data.address != cached.data.address;
+	if (guards_except_base && requested.data.address == cached.data.address) {
+		plan.branch = OverlapPlanBranch::MergedCopy;
+	}
+	return plan;
+}
+
 TextureCache::OverlapResult TextureCache::ResolveOverlap(const ImageInfo& requested,
                                                          BindingType binding, ImageId cached_id,
                                                          ImageId merged_id, bool speculative) {
@@ -1282,9 +1318,8 @@ TextureCache::OverlapResult TextureCache::ResolveOverlap(const ImageInfo& reques
 	AliasFreeScope alias_free_scope {m_alias_free_in_progress};
 	auto&      cached       = *owner;
 	const auto current_tick = m_scheduler.CurrentTick();
-	const bool safe_to_delete =
-	    current_tick - std::min(current_tick, cached.tick_accessed_last) > NumFramesBeforeRemoval &&
-	    cached.heap_refs.load(std::memory_order_relaxed) == 0u;
+	const bool safe_to_delete = OverlapSafeToDelete(
+	    current_tick, cached.tick_accessed_last, cached.heap_refs.load(std::memory_order_relaxed));
 
 	const uint32_t requested_block = requested.bytes_per_block * requested.samples;
 	const uint32_t cached_block    = cached.info.bytes_per_block * cached.info.samples;
@@ -1410,6 +1445,30 @@ TextureCache::OverlapResult TextureCache::ResolveOverlap(const ImageInfo& reques
 		            static_cast<unsigned long long>(cached.info.data.size),
 		            vk::to_string(cached.info.pixel_format).c_str(),
 		            (requested.data.address >= cached.info.data.address && safe_to_delete) ? 1 : 0);
+	}
+	// KYTY_OVERLAP_MERGE_COPY: keep the cached texels, the same way as the mip branch above.
+	if (OverlapMergeCopyEnabled() &&
+	    PlanOverlapCopy(requested, cached.info, static_cast<bool>(merged_id), speculative,
+	                    safe_to_delete)
+	            .branch == OverlapPlanBranch::MergedCopy) {
+		static std::atomic<uint64_t> copies {0};
+		const auto copy = copies.fetch_add(1, std::memory_order_relaxed) + 1;
+		if ((copy & (copy - 1)) == 0) {
+			std::printf("NHL27OVERLAPCOPY: addr=0x%llx merged=%ux%u %s cached=%ux%u %s n=%llu\n",
+			            static_cast<unsigned long long>(cached.info.data.address),
+			            requested.extent.width, requested.extent.height,
+			            vk::to_string(requested.pixel_format).c_str(), cached.info.extent.width,
+			            cached.info.extent.height, vk::to_string(cached.info.pixel_format).c_str(),
+			            static_cast<unsigned long long>(copy));
+			std::fflush(stdout);
+		}
+		cached.binding.needs_rebind |= cached.binding.is_bound || cached.binding.is_target;
+		BumpGeneration(cached.info.data.address, cached.info.data.address + cached.info.data.size);
+		GenCount(FrameBreakdown::g_delta.gen_rebind);
+		m_slot_images[merged_id].binding.is_target |= cached.binding.is_target;
+		CopyImage(merged_id, cached_id);
+		FreeImage(cached_id);
+		return {merged_id};
 	}
 	if (requested.data.address >= cached.info.data.address && safe_to_delete) {
 		FreeImage(cached_id);
