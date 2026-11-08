@@ -219,8 +219,8 @@ async function boot(bridge) {
 /* ---------- demo stand-in (plain browser only) ---------- */
 function demoApi() {
   const s = {
-    version: '1.0.0', folder: 'D:\\Games\\KytyPS5-nhl27-enhanced-rc4', emulator: true,
-    game: { ok: true, status: 'Ready', path: 'D:\\PS5\\NHL27\\PPSA34063-app0', title: 'NHL 27', version: '01.003.001', title_id: 'PPSA34063', icon: null },
+    version: '1.0.0', folder: 'C:\\Games\\KytyPS5-nhl27-enhanced-rc4', emulator: true,
+    game: { ok: true, status: 'Ready', path: 'C:\\Games\\NHL27\\PPSA34063-app0', title: 'NHL 27', version: '01.003.001', title_id: 'PPSA34063', icon: null },
     settings: { resolution: 'R2560X1440', fullscreen: false, scale: 0.6667, trophies: true },
     cache: { bytes: 113 * 1024 * 1024, files: 3, warm: true }, saves: ['Profile0', 'ThreeOnThree0'],
     run: { running: false, elapsed: 0, last_exit: null, error: null },

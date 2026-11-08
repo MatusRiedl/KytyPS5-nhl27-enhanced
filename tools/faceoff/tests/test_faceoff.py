@@ -6,14 +6,17 @@ import pytest
 
 from faceoff import config, game, launch
 
-RC4 = r"D:\PS5\Development\release\KytyPS5-nhl27-enhanced-rc4"
+# The release ships tools/nhl27/cfgGlobal.json; set FACEOFF_RC_DIR to test against an unpacked release instead.
+HERE = os.path.dirname(os.path.abspath(__file__))
+RC_DIR = os.environ.get("FACEOFF_RC_DIR", os.path.join(HERE, "..", "..", "nhl27"))
+GAME = r"C:\Games\NHL27\PPSA34063-app0"
 
 
 @pytest.fixture
 def build(tmp_path):
-    src = os.path.join(RC4, "cfgGlobal.json")
+    src = os.path.join(RC_DIR, "cfgGlobal.json")
     if not os.path.exists(src):
-        pytest.skip("RC4 folder not present")
+        pytest.skip("cfgGlobal.json not found")
     shutil.copy(src, tmp_path / "cfgGlobal.json")
     return str(tmp_path)
 
@@ -54,8 +57,8 @@ def test_missing_key_added(tmp_path):
 
 
 def test_command_line_matches_ps1(build):
-    env, args = launch.plan(build, r"D:\PS5\NHL27\PPSA34063-app0")
-    assert args == r'--game "D:\PS5\NHL27\PPSA34063-app0" --screen-width 2560 --screen-height 1440 --redzone'
+    env, args = launch.plan(build, GAME)
+    assert args == rf'--game "{GAME}" --screen-width 2560 --screen-height 1440 --redzone'
     assert env["KYTY_NHL_RES_SCALE"] == "0.6667"
     assert env["KYTY_FLAG_FILE"] == ""
     config.save_setting(build, "fullscreen", True)

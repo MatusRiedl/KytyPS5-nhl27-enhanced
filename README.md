@@ -157,7 +157,13 @@ The code of each release is on the release page and on the branch `nhl27-enhance
 
 Built for the NHL community, by [Puck Peak](https://www.puckpeak.com).
 
-Standing on the work of duy64 ([KytyPS5-nhl](https://github.com/duy64/KytyPS5-nhl)), pengui07, pargi, the [KytyPS5](https://github.com/KytyPS5/KytyPS5) authors and the original [Kyty](https://github.com/InoriRus/Kyty). AnyPS5 (boykopovar) was used as a reference only. No code was copied from it. The credits from upstream are in [docs/README-upstream.md](docs/README-upstream.md#credits).
+**duy64** made this possible. This repository is a GitHub fork of his [KytyPS5-nhl](https://github.com/duy64/KytyPS5-nhl), which first got NHL 27 to boot and play on KytyPS5, and every release here is built on top of his branch. From his work this build uses:
+- his NHL 27 fork itself (release `a917829`), the base of every release here;
+- the twelve on-ice fixes from his [2026-11-07 release](https://github.com/duy64/KytyPS5-nhl/releases/tag/KytyPS5-2026-11-07-3c507ca-f2dump), new in RC4, cherry-picked unchanged with him as the author of each commit (`git log --author=duy64` lists his commits).
+
+Thank you, duy64. If this build helps you, star [his repository](https://github.com/duy64/KytyPS5-nhl) too.
+
+Also standing on the work of pengui07, pargi, the [KytyPS5](https://github.com/KytyPS5/KytyPS5) authors and the original [Kyty](https://github.com/InoriRus/Kyty). AnyPS5 (boykopovar) was used as a reference only. No code was copied from it. The credits from upstream are in [docs/README-upstream.md](docs/README-upstream.md#credits).
 
 The changes, measurements and notes were produced with an AI coding assistant (Claude) driving the build, scripted test runs and log analysis. The Be a Pro crash and the image bug were found by hand.
 
