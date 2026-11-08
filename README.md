@@ -22,20 +22,23 @@ Questions, news and help: **[gg.puckpeak.com](https://gg.puckpeak.com)**
 
 ## ✨ Highlights
 
+- 🏒 **New in RC4: Faceoff, the launcher.** Pick your game, set resolution, display mode and render scale, see the shader cache and saves, and press Play.
+- 🧊 **New in RC4: on-ice glitch fixes by duy64.** Twelve fixes from [his 2026-11-07 release](https://github.com/duy64/KytyPS5-nhl/releases/tag/KytyPS5-2026-11-07-3c507ca-f2dump) for broken ice and arena effects and stale textures.
 - 🛠 **Be a Pro crash fixed.** Opening Weekly Growth or Traits crashed the game every time. 5 of 5 opens crashed before the fix, 0 of 13 after it.
 - 🖼 **Be a Pro pictures fixed.** The hub headline picture and the player, agent, coach and GM portraits no longer come out as coloured noise.
 - 🎯 **Steady pace.** Menus hold 30 fps and play holds 60 fps, the way the game asks for them, instead of running uncapped.
 - ⚡ **A faster build.** Built with PGO and AVX2. Play 1% lows rose from about 46 to about 49 fps, and frames over 50 ms in a match fell from about 30 to about 15.
-- 🖱 **One double-click to start.** `Play-NHL27.cmd` applies all the NHL 27 settings for you and remembers your game folder.
+- 🖱 **One double-click to start.** `Faceoff.exe` (or `Play-NHL27.cmd`) applies all the NHL 27 settings for you and remembers your game folder.
 - 📦 **Everything in one zip.** No separate emulator or launcher to install.
 
 ## 🚀 Get started
 
-1. Download `KytyPS5-nhl27-enhanced-rc3.zip` (11 MB) from the release page.
+1. Download `KytyPS5-nhl27-enhanced-rc4.zip` (30 MB) from the release page.
 2. Extract it anywhere you can write to, with at least 2 GB free. Not inside `Program Files`.
-3. Double-click `Play-NHL27.cmd`.
-4. Pick your game folder, the one that holds `eboot.bin`. It's remembered in `game_path.txt`: delete that file to pick another folder.
-5. Keep the black window open while you play. Close the game window when you're done.
+3. Double-click `Faceoff.exe`. It needs the Microsoft WebView2 Runtime, which Windows 11 already has. `Play-NHL27.cmd` still works as a plain fallback.
+4. Click Browse and pick your game folder, the one that holds `eboot.bin`. It's remembered in `game_path.txt`.
+5. Choose your settings and press Play.
+6. Close the game window when you're done.
 
 Don't start `kyty_emulator.exe` directly: it would run without the NHL 27 settings.
 
@@ -107,7 +110,12 @@ The folder grows to about 1 GB after the first run. The shader cache in `_Pipeli
 
 ## What changed
 
-Changes made on top of [duy64/KytyPS5-nhl](https://github.com/duy64/KytyPS5-nhl) release `a917829`, up to 2026-11-02:
+**RC4 (2026-11-08):**
+
+- **On-ice fixes by duy64:** twelve commits from his 2026-11-07 release, ported unchanged with him as the author. Compute shaders that share data between threads see each other's writes in time; a copy or CPU write into texture memory refreshes every texture it touches; textures loaded before their first use are uploaded. His F2 capture tool and auto-updater are not included.
+- **Faceoff launcher:** source in [tools/faceoff](tools/faceoff).
+
+**RC1 to RC3:** changes made on top of [duy64/KytyPS5-nhl](https://github.com/duy64/KytyPS5-nhl) release `a917829`, up to 2026-11-02:
 
 - **Be a Pro crash:** a depth target reused at the same address with a wider width kept the old, narrower image. It's rebuilt now. This was not an NVIDIA driver bug.
 - **Be a Pro images:** the game reads those pictures from memory right after the GPU draws them, and the emulator now copies them back in time. `KYTY_READBACK_STILLS=0` turns this off.

@@ -1,0 +1,38 @@
+/* Faceoff look: arena black-navy, ice white, goal-light red. Titillium Web: SIL Open Font License (fonts/OFL.txt). */
+@font-face { font-family: 'Titillium Web'; font-weight: 400; font-display: block; src: url('../fonts/titillium-web-400-latin.woff2') format('woff2'); }
+@font-face { font-family: 'Titillium Web'; font-weight: 600; font-display: block; src: url('../fonts/titillium-web-600-latin.woff2') format('woff2'); }
+@font-face { font-family: 'Titillium Web'; font-weight: 700; font-display: block; src: url('../fonts/titillium-web-700-latin.woff2') format('woff2'); }
+
+:root {
+  --font: 'Titillium Web', 'Segoe UI', system-ui, sans-serif;
+
+  --bg: #05080e;
+  --bg-2: #0a111c;
+  --ice: #eaf4ff;
+  --ice-2: #b9d6f2;
+  --ice-glow: rgba(160, 215, 255, .35);
+  --cyan: #38c6ff;
+  --red: #e4002b;
+  --red-hi: #ff2a4d;
+  --red-deep: #9e001e;
+  --red-glow: rgba(228, 0, 43, .45);
+  --blue-line: rgba(56, 120, 255, .16);
+  --red-line: rgba(228, 0, 43, .14);
+
+  --card: rgba(12, 20, 33, .78);
+  --card-2: rgba(8, 14, 24, .86);
+  --card-bd: rgba(150, 190, 230, .14);
+  --card-bd-hi: rgba(180, 220, 255, .32);
+  --line: rgba(150, 190, 230, .10);
+
+  --text: #eef5fc;
+  --muted: #93a9c0;
+  --faint: #5f7590;
+  --good: #3ee08f;
+  --warn: #ffb547;
+
+  --skew: -8deg;
+  --radius: 4px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+}

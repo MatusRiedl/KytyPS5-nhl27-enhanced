@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faceoff</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/motion.css">
+</head>
+<body>
+<div class="rink" aria-hidden="true">
+  <svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+    <line x1="800" y1="0" x2="800" y2="900" class="red-line"/>
+    <line x1="480" y1="0" x2="480" y2="900" class="blue-line"/>
+    <line x1="1120" y1="0" x2="1120" y2="900" class="blue-line"/>
+    <circle cx="800" cy="450" r="150" class="circle"/>
+    <circle cx="800" cy="450" r="8" class="dot"/>
+    <circle cx="240" cy="230" r="120" class="circle faint"/>
+    <circle cx="240" cy="670" r="120" class="circle faint"/>
+    <circle cx="1360" cy="230" r="120" class="circle faint"/>
+    <circle cx="1360" cy="670" r="120" class="circle faint"/>
+  </svg>
+  <div class="sheen"></div>
+</div>
+<div id="art" class="art" aria-hidden="true"></div>
+
+<header class="top">
+  <div class="brand">
+    <span class="mark"><svg viewBox="0 0 40 40"><rect x="18.9" y="0" width="2.2" height="40"/><circle cx="20" cy="20" r="11" fill="none" stroke="#e61e34" stroke-width="2.6"/><circle cx="20" cy="20" r="2.4"/></svg></span>
+    <span class="word">FACE<b>OFF</b></span>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" role="tab" data-tab="play" aria-selected="true">Play</button>
+    <button class="tab" role="tab" data-tab="multi" aria-selected="false">Multiplayer</button>
+    <span class="tab-bar" aria-hidden="true"></span>
+  </nav>
+  <div class="ver" id="ver"></div>
+</header>
+
+<main>
+  <section class="page active" id="page-play" role="tabpanel">
+    <div class="hero card">
+      <div class="hero-head">
+        <div class="kicker" id="kicker">KytyPS5 · NHL 27 enhanced</div>
+        <h1 id="title">NHL 27</h1>
+        <div class="meta">
+          <span class="pill" id="status"><i></i><span>Checking…</span></span>
+          <span class="chip" id="version" hidden></span>
+          <span class="chip" id="titleid" hidden></span>
+        </div>
+      </div>
+
+      <div class="folder">
+        <div class="label">Game folder</div>
+        <div class="folder-row">
+          <div class="path" id="path" title="">Not chosen yet</div>
+          <button class="btn" id="browse">Browse</button>
+        </div>
+        <div class="hint">The folder that holds <code>eboot.bin</code> from your own dump.</div>
+      </div>
+
+        <div class="stats">
+          <div class="stat">
+            <div class="s-head">Shader cache <span class="tag" id="cachetag">–</span></div>
+            <div class="big" id="cachesize">–</div>
+            <div class="meter"><span id="cachebar"></span></div>
+            <div class="hint" id="cachehint">&nbsp;</div>
+            <div class="stat-actions">
+              <button class="btn small ghost" data-open="cache">Open</button>
+              <button class="btn small ghost danger" id="clearcache">Clear</button>
+            </div>
+          </div>
+          <div class="stat">
+            <div class="s-head">Saves</div>
+            <div class="big" id="savecount">–</div>
+            <div class="hint" id="savelist">&nbsp;</div>
+            <div class="stat-actions">
+              <button class="btn small ghost" data-open="saves">Open</button>
+              <button class="btn small ghost" data-open="folder">Build folder</button>
+            </div>
+          </div>
+        </div>
+
+      <div class="play-wrap">
+        <button class="play" id="play" disabled>
+          <span class="play-fill"></span>
+          <span class="play-ice"></span>
+          <span class="play-text"><svg viewBox="0 0 24 24" class="tri"><path d="M7 4l13 8-13 8z"/></svg><span id="playlabel">Play</span></span>
+        </button>
+        <div class="play-sub" id="playsub">&nbsp;</div>
+      </div>
+
+      <div class="banner" id="banner" hidden>
+        <span id="bannertext"></span>
+        <button class="btn small" data-open="log">Open play_log.txt</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card settings">
+        <div class="card-title"><span>Settings</span><em id="saved">Saved</em></div>
+
+        <div class="setting">
+          <div class="s-label">Resolution <small>Game window size</small></div>
+          <div class="seg" data-setting="resolution">
+            <button data-v="R1280X720">720p</button>
+            <button data-v="R1920X1080">1080p</button>
+            <button data-v="R2560X1440">1440p</button>
+            <button data-v="R3840X2160">4K</button>
+            <span class="seg-thumb"></span>
+          </div>
+        </div>
+
+        <div class="setting">
+          <div class="s-label">Display <small>Window or full screen</small></div>
+          <div class="seg" data-setting="fullscreen">
+            <button data-v="false">Windowed</button>
+            <button data-v="true">Fullscreen</button>
+            <span class="seg-thumb"></span>
+          </div>
+        </div>
+
+        <div class="setting">
+          <div class="s-label">Render scale <small>Lower is faster, higher is sharper</small></div>
+          <div class="seg" data-setting="scale">
+            <button data-v="0.5">50%</button>
+            <button data-v="0.6667">67%</button>
+            <button data-v="0.85">85%</button>
+            <button data-v="1">100%</button>
+            <span class="seg-thumb"></span>
+          </div>
+        </div>
+
+        <div class="setting row">
+          <div class="s-label">Trophy popups <small>Show unlocks in game</small></div>
+          <button class="toggle" id="trophies" role="switch" aria-checked="true"><span></span></button>
+        </div>
+
+        <div class="setting controls">
+          <div class="s-label">Controls <small>Plug in your controller before you press Play</small></div>
+          <div class="keys">
+            <span><kbd>WASD</kbd> Stick</span><span><kbd>J</kbd> Cross</span><span><kbd>L</kbd> Circle</span>
+            <span><kbd>K</kbd> Square</span><span><kbd>I</kbd> Triangle</span><span><kbd>Q</kbd><kbd>E</kbd> L1 / R1</span>
+            <span><kbd>Enter</kbd> Options</span><span><kbd>Arrows</kbd> D-pad</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <section class="page" id="page-multi" role="tabpanel">
+    <div class="construct card">
+      <div class="hazard"></div>
+      <div class="construct-body">
+        <div class="puck-lane"><div class="puck"></div></div>
+        <div class="kicker">Multiplayer</div>
+        <h2>Under construction</h2>
+        <p>Online faceoffs are coming. This is where you'll find and join matches.</p>
+        <div class="dots"><i></i><i></i><i></i></div>
+      </div>
+      <div class="hazard bottom"></div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status"></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card card">
+    <h3>Clear the shader cache?</h3>
+    <p>The next arena load will stutter for 30 seconds or longer while shaders compile again. Saves are not touched.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modalno">Cancel</button>
+      <button class="btn danger" id="modalyes">Clear cache</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
