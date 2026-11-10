@@ -73,6 +73,27 @@ struct PerfStats {
 };
 PerfStats g_perf;
 
+// NHL27MEM: the game buffers alive now, their bytes, and the largest one created since the last
+// line (swapchain.cpp prints them every 30 s). Updated on create/delete, read from another thread.
+std::atomic<uint64_t> g_mem_buffers {0};
+std::atomic<uint64_t> g_mem_bytes {0};
+std::atomic<uint64_t> g_mem_largest {0};
+std::atomic<uint64_t> g_mem_retries {0};
+
+void NoteBufferCreated(uint64_t size) {
+	g_mem_buffers.fetch_add(1, std::memory_order_relaxed);
+	g_mem_bytes.fetch_add(size, std::memory_order_relaxed);
+	auto largest = g_mem_largest.load(std::memory_order_relaxed);
+	while (size > largest &&
+	       !g_mem_largest.compare_exchange_weak(largest, size, std::memory_order_relaxed)) {
+	}
+}
+
+void NoteBufferDeleted(uint64_t size) {
+	g_mem_buffers.fetch_sub(1, std::memory_order_relaxed);
+	g_mem_bytes.fetch_sub(size, std::memory_order_relaxed);
+}
+
 // Per-4KiB-page statistics of fault-triggered downloads; GPU thread only, reset every print.
 struct FaultPageStat {
 	uint64_t    count       = 0;
@@ -590,6 +611,7 @@ void BufferCache::Unregister(BufferId id) {
 template <bool insert>
 void BufferCache::ChangeRegister(BufferId id) {
 	++m_registration_generation;
+	FrameBreakdown::VAdd(FrameBreakdown::g_counters.buffer_registrations);
 	auto& buffer = m_slot_buffers[id];
 	PageTable::PageRange pages {};
 	EXIT_IF(!(GuestRange {buffer.CpuAddress(), buffer.Size()}.Valid()) ||
@@ -649,6 +671,7 @@ void BufferCache::DeleteBuffer(BufferId id) {
 		WaitAsyncReadbacksOf(id);
 	}
 	PerfCount(PerfEvent::BufferDelete);
+	NoteBufferDeleted(m_slot_buffers[id].Size());
 	Unregister(id);
 	if (m_scheduler.Active()) {
 		m_scheduler.DeferHostOperation([this, id] { m_slot_buffers.erase(id); });
@@ -2071,22 +2094,69 @@ void BufferCache::JoinOverlap(BufferId new_id, BufferId overlap_id, bool accumul
 	DeleteBuffer(overlap_id);
 }
 
+BufferMemoryStats BufferCacheMemoryStats() {
+	BufferMemoryStats stats;
+	stats.buffers = g_mem_buffers.load(std::memory_order_relaxed);
+	stats.bytes   = g_mem_bytes.load(std::memory_order_relaxed);
+	stats.largest = g_mem_largest.exchange(0, std::memory_order_relaxed);
+	stats.retries = g_mem_retries.load(std::memory_order_relaxed);
+	return stats;
+}
+
 BufferId BufferCache::CreateBuffer(uint64_t vaddr, uint64_t size) {
 	EXIT_IF(m_scheduler.Current().IsInvalid());
 	const auto end = Common::AlignUp(vaddr + size, CACHING_PAGESIZE);
 	vaddr = Common::AlignDown(vaddr, CACHING_PAGESIZE);
 	size               = end - vaddr;
-	const auto overlap = ResolveOverlaps(vaddr, size);
+	auto overlap = ResolveOverlaps(vaddr, size);
 	PerfCount(PerfEvent::BufferCreate);
 	if (PerfStatsEnabled()) {
 		g_perf.created_bytes.fetch_add(overlap.end - overlap.begin, std::memory_order_relaxed);
 	}
 	FrameBreakdown::Add(FrameBreakdown::g_counters.port_buffer_creates);
 
-	const auto id = m_slot_buffers.insert(
-	    m_graphics, m_scheduler, MemoryUsage::DeviceLocal, overlap.begin,
-	    AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress, overlap.end - overlap.begin);
+	const auto insert = [&] {
+		Buffer::AllowSoftFailure(true);
+		const auto new_id = m_slot_buffers.insert(
+		    m_graphics, m_scheduler, MemoryUsage::DeviceLocal, overlap.begin,
+		    AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress, overlap.end - overlap.begin);
+		Buffer::AllowSoftFailure(false);
+		return new_id;
+	};
+	auto id = insert();
+	if (m_slot_buffers[id].Failed()) {
+		// Out of video memory (RC5 4K crash, 2026-11-10: a 468 MB buffer failed with 10.8 of
+		// 15.9 GB used). Buffers merged away in earlier command buffers are still waiting for
+		// their deferred erase: wait for the work already submitted (not the current command
+		// buffer, whose resources may be bound right now), run the finished deferred operations
+		// and try once more. The overlap is resolved again because those operations may have
+		// changed the cache.
+		m_slot_buffers.erase(id);
+		g_mem_retries.fetch_add(1, std::memory_order_relaxed);
+		printf("BufferCache: buffer of %" PRIu64 " bytes at 0x%016" PRIx64
+		       " failed, freeing finished work and retrying (buffers=%" PRIu64 ", bytes=%" PRIu64
+		       ")\n",
+		       overlap.end - overlap.begin, overlap.begin,
+		       g_mem_buffers.load(std::memory_order_relaxed),
+		       g_mem_bytes.load(std::memory_order_relaxed));
+		const auto used_before = m_graphics.GetDeviceMemoryUsage();
+		if (!CommandScheduler::InDeferredOperation() && m_scheduler.CurrentTick() > 0) {
+			m_scheduler.Wait(m_scheduler.CurrentTick() - 1);
+			m_scheduler.PopPendingOperations();
+		}
+		m_graphics.ReleaseRecycledImages();
+		overlap = ResolveOverlaps(vaddr, size);
+		id      = insert();
+		const bool failed = m_slot_buffers[id].Failed();
+		printf("BufferCache: retry after freeing finished work %s (vram_used_mb %" PRIu64
+		       " -> %" PRIu64 ", size %" PRIu64 ")\n",
+		       failed ? "failed" : "succeeded", used_before >> 20u,
+		       m_graphics.GetDeviceMemoryUsage() >> 20u, overlap.end - overlap.begin);
+		fflush(stdout);
+		EXIT_IF(failed);
+	}
 	const auto& buffer = m_slot_buffers[id];
+	NoteBufferCreated(buffer.Size());
 	SetVulkanObjectNameF(m_graphics.device, buffer.Handle(),
 	                     "Kyty.GameBuffer[guest=0x{:016x} size=0x{:x}]", overlap.begin,
 	                     overlap.end - overlap.begin);
@@ -2223,6 +2293,27 @@ void BufferCache::StreamGuestData(uint8_t* destination, uint64_t vaddr, uint64_t
 		if (const void* source = Libs::LibKernel::Memory::FindBackingPointer(vaddr, size)) {
 			copies->Copy(destination, source, size);
 			return;
+		}
+		// A range no single mapping holds: a page at a time (mappings hold whole pages), so the
+		// copies still go to the copy thread instead of waiting for all of its work (in-play A/B:
+		// draw 3.572 -> 3.342 us, dispatch 2.304 -> 2.231 us).
+		if (deferring) {
+			constexpr uint64_t Page = 0x1000;
+			bool               all  = true;
+			for (uint64_t at = vaddr; at < vaddr + size && all;) {
+				const auto chunk = std::min((at & ~(Page - 1)) + Page, vaddr + size) - at;
+				all              = Libs::LibKernel::Memory::FindBackingPointer(at, chunk) != nullptr;
+				at += chunk;
+			}
+			if (all) {
+				for (uint64_t at = vaddr; at < vaddr + size;) {
+					const auto chunk = std::min((at & ~(Page - 1)) + Page, vaddr + size) - at;
+					copies->Copy(destination + (at - vaddr), Libs::LibKernel::Memory::FindBackingPointer(at, chunk),
+					             chunk);
+					at += chunk;
+				}
+				return;
+			}
 		}
 	}
 	if (deferring && copies != nullptr) {
@@ -2413,6 +2504,14 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBufferCached(uint64_t vaddr, uin
 		return {&buffer, entry.offset};
 	}
 	FrameBreakdown::VAdd(FrameBreakdown::g_counters.obtain_cache_misses);
+	if (FrameBreakdown::Verbose()) {
+		auto& c = FrameBreakdown::g_counters;
+		FrameBreakdown::VAdd(entry.vaddr != vaddr || entry.size != size         ? c.obtain_miss_slot
+		                     : entry.registration != m_registration_generation ? c.obtain_miss_registration
+		                     : IsBufferInvalid(entry.id) || !m_slot_buffers[entry.id].IsInBounds(vaddr, size)
+		                         ? c.obtain_miss_buffer
+		                         : c.obtain_miss_cpu);
+	}
 	// Stamp before the lookup so a CPU write racing with it forces a recheck on the next hit.
 	const auto registration = m_registration_generation;
 	const auto result       = ObtainBuffer(vaddr, size, false, false, id);
@@ -2422,6 +2521,11 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBufferCached(uint64_t vaddr, uin
 		if (!IsBufferInvalid(found) && &m_slot_buffers[found] == result.first) {
 			entry = {vaddr, size, registration, cpu, found, result.second};
 		}
+	} else if (FrameBreakdown::Verbose()) {
+		auto& c = FrameBreakdown::g_counters;
+		FrameBreakdown::VAdd(result.first == &m_stream_buffer             ? c.obtain_nostore_stream
+		                     : registration != m_registration_generation ? c.obtain_nostore_registration
+		                                                                 : c.obtain_nostore_cpu);
 	}
 	return result;
 }
@@ -2575,8 +2679,7 @@ void BufferCache::CopyBuffer(uint64_t dst_vaddr, uint64_t src_vaddr, uint64_t si
 		     src_vaddr, dst_vaddr, size, static_cast<int>(src_gds), static_cast<int>(dst_gds));
 	}
 	if (src_memory && dst_memory && !IsRegionGpuModified(dst_vaddr, size) &&
-	    !IsRegionGpuModified(src_vaddr, size) && !m_texture_cache.IsRegionRegistered(src_vaddr, size) &&
-	    !m_texture_cache.IsRegionRegistered(dst_vaddr, size)) {
+	    !IsRegionGpuModified(src_vaddr, size) && !m_texture_cache.FindImageFromRange(src_vaddr, size)) {
 		std::memcpy(reinterpret_cast<void*>(dst_vaddr), reinterpret_cast<const void*>(src_vaddr),
 		            size);
 		return;
@@ -2989,6 +3092,7 @@ void BufferCache::RunGarbageCollector() {
 		if (m_record_released) {
 			m_released_ranges.Add(buffer.CpuAddress(), buffer.Size());
 		}
+		NoteBufferDeleted(buffer.Size());
 		Unregister(id);
 		m_slot_buffers.erase(id);
 	}

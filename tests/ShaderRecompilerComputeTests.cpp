@@ -14454,8 +14454,8 @@ public:
   }
 
 
-  void CheckCubeFaceStorageExpansion() {
-    constexpr const char *name = "CubeFaceStorageExpansion";
+  void CheckCubeFaceStorage() {
+    constexpr const char *name = "CubeFaceStorage";
     constexpr uintptr_t base = 0x0000000204700000ull;
     constexpr uint64_t allocation_size = 0x10000;
     constexpr std::array<uint32_t, 6> half_red{0x3c00, 0x4000, 0x4200,
@@ -14522,15 +14522,16 @@ public:
         Image storage;
         storage.view = cache.FindTexture(binding.image_id, binding.desc);
         auto &image = cache.GetImage(binding.image_id);
+        // Face 0 has DEPTH 0, like Teardown's sky cube.
         Require(name, "face view and backing", storage.view != nullptr &&
                     image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
                     image.info.bytes_per_block == 8 &&
-                    image.info.resources.layers == face + 1 &&
-                    image.backing.layers == face + 1 &&
+                    image.info.resources.layers == 6 &&
+                    image.backing.layers == 6 &&
                     binding.desc.view_info.type == vk::ImageViewType::e2DArray &&
                     binding.desc.view_info.base_layer == face &&
-                    binding.desc.view_info.layer_count == 1,
-                "cube face did not expand the array or select its own layer");
+                    binding.desc.view_info.layer_count == 6 - face,
+                "cube face did not back six faces or select its own layer");
         image.Transit(vk::ImageLayout::eGeneral, vk::AccessFlagBits2::eShaderWrite,
                       {}, scheduler.Current().Handle());
         storage.layout = image.backing.state.layout;
@@ -15493,6 +15494,30 @@ public:
                 ReadCachedTexel(name, context, store.image_id) ==
                     std::vector<uint32_t>{1, 1},
                 "query/store did not access the standalone 1x1 mip");
+      }
+      {
+        // No Man's Sky compresses mip 1 through a T# that declares one level.
+        constexpr uint64_t address = base + 0x400000;
+        ShaderRecompiler::IR::DescriptorValue descriptor{};
+        descriptor.dwords = {static_cast<uint32_t>(address >> 8u),
+                             0xc3e00000u, 0x003fc03fu, 0xd051102cu, 0, 0x00700000u, 0, 0};
+        descriptor.dword_count = 8;
+        const auto store =
+            RenderExecutorTestAccess::ResolveTexture(executor, storage_resource, descriptor);
+        Require(name, "mip view past MAX_MIP",
+                store.desc.info.extent.width == 128 &&
+                    store.desc.info.extent.height == 128 &&
+                    store.desc.info.resources.levels == 1 &&
+                    store.desc.info.data.size == 0x20000 &&
+                    store.desc.view_info.base_level == 0,
+                "a view past MAX_MIP did not rebase to its own 128x128 chain");
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
+        ExpectFatal("TailMipViewPastMaxMip", [&] {
+          auto tail = descriptor;
+          tail.dwords[3] = 0xd054402cu;
+          (void)RenderExecutorTestAccess::ResolveTexture(executor, storage_resource, tail);
+        });
+#endif
       }
       auto plain_mipped_storage_binding =
           RenderExecutorTestAccess::ResolveTexture(executor, storage_resource,
@@ -47091,9 +47116,12 @@ void CheckDepthTextureEncoding() {
   }};
   auto retained_metadata_address = compressed_descriptor;
   retained_metadata_address.fields[6] &= 0xff000000u;
+  auto pipe_aligned_metadata = disabled_metadata;
+  pipe_aligned_metadata.fields[6] = 1u << 19u; // META_PIPE_ALIGNED without COMPRESSION_EN
   Require("DepthTextureEncoding", "disabled metadata with retained address",
           IsSupportedDepthTextureEncoding(disabled_metadata) &&
-              IsSupportedDepthTextureEncoding(retained_metadata_address),
+              IsSupportedDepthTextureEncoding(retained_metadata_address) &&
+              IsSupportedDepthTextureEncoding(pipe_aligned_metadata),
           "uncompressed depth rejected inactive metadata address bits");
 
   const ShaderTextureResource first_use_depth{{
@@ -47115,13 +47143,16 @@ void CheckDepthTextureEncoding() {
   dcc_only_control.fields[6] |= 1u << 22u;
   auto non_msaa_iterate_256 = compressed_descriptor;
   non_msaa_iterate_256.fields[6] |= 1u << 10u;
+  auto uncompressed_dcc_control = pipe_aligned_metadata;
+  uncompressed_dcc_control.fields[6] |= 1u << 22u;
   Require(
       "DepthTextureEncoding", "invalid HTILE encoding",
       !IsSupportedDepthTextureEncoding(missing_metadata) &&
           !IsSupportedDepthTextureEncoding(out_of_range_metadata) &&
           !IsSupportedDepthTextureEncoding(unaligned_metadata) &&
           !IsSupportedDepthTextureEncoding(dcc_only_control) &&
-          !IsSupportedDepthTextureEncoding(non_msaa_iterate_256),
+          !IsSupportedDepthTextureEncoding(non_msaa_iterate_256) &&
+          !IsSupportedDepthTextureEncoding(uncompressed_dcc_control),
       "compressed sampled depth accepted an unsupported address or control");
 
   std::printf("[host]    %-32s ok\n", "DepthTextureEncoding");
@@ -47190,6 +47221,11 @@ ShaderRecompiler::IR::ImageResource Ppsa01530MaxMipStorageTextureResource() {
   auto resource = BasicBgraStorageTextureResource();
   resource.numeric_class = Prospero::TextureNumericClass::Uint;
   return resource;
+}
+
+ShaderTextureResource Ppsa02110MinLodStorageTextureDescriptor() {
+  return {{0x13053000u, 0xc3e40000u, 0x003fc03fu, 0xd054402cu, 0x00000000u,
+           0x00700080u, 0x000000d1u, 0x00000000u}};
 }
 
 ShaderTextureResource Ppsa02527R16FloatStorageTextureDescriptor() {
@@ -47834,6 +47870,19 @@ void CheckBasicStorageTextureDescriptor() {
 }
 #endif
 
+void CheckStorageTextureMinLodAtBaseLevel() {
+  const auto descriptor = Ppsa02110MinLodStorageTextureDescriptor();
+  Require("StorageTextureMinLod", "PPSA02110 mip-four descriptor",
+          descriptor.BaseLevel() == 4 && descriptor.LastLevel() == 4 &&
+              descriptor.MinLod() == 4u << 8u &&
+              descriptor.Format() == Prospero::BufferFormat::k32_32UInt &&
+              descriptor.TileMode() == Prospero::TileMode::kStandard4KB,
+          "PPSA02110 MIN_LOD storage descriptor fixture is malformed");
+  ValidateStorageTexture(Ppsa01530MaxMipStorageTextureResource(), descriptor,
+                         0xab000);
+  std::printf("[host]    %-32s ok\n", "StorageTextureMinLod");
+}
+
 void CheckStorageTextureLinearUploadLayout() {
   constexpr auto format = Prospero::BufferFormat::k8_8_8_8UNorm;
   constexpr uint32_t width = 3840;
@@ -48324,6 +48373,13 @@ void CheckShaderRecompilerFatalContracts() {
     AppendEnd(&test.code);
     test.opcodes = {ShaderOpcode::DS_OR_B64, ShaderOpcode::S_ENDPGM};
     (void)CompileCase(test);
+  });
+
+  ExpectFatal("StorageTextureMinLodAboveBase", [] {
+    auto descriptor = Ppsa02110MinLodStorageTextureDescriptor();
+    descriptor.fields[1] += 1u << 8u;
+    ValidateStorageTexture(Ppsa01530MaxMipStorageTextureResource(), descriptor,
+                           0xab000);
   });
 
   {
@@ -52357,7 +52413,7 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::strcmp(argv[1], "--layered-image-only") == 0) {
     VulkanHarness vulkan;
     vulkan.CheckUnifiedImageViewCache();
-    vulkan.CheckCubeFaceStorageExpansion();
+    vulkan.CheckCubeFaceStorage();
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--image-view-cache-only") == 0) {
@@ -52547,6 +52603,7 @@ int main(int argc, char **argv) {
   bool skipped_device_checks = false;
 #endif
   CheckImageSamplerSpecialization();
+  CheckStorageTextureMinLodAtBaseLevel();
   CheckResourcePlanHandoff();
   CheckNativeImageDescriptorTypes();
   CheckClipControlDepthClipState();
@@ -52622,7 +52679,7 @@ int main(int argc, char **argv) {
   vulkan.CheckUnifiedTextureCacheFlow();
   vulkan.CheckUnifiedImageViewCache();
   vulkan.CheckPackedTextureComponents();
-  vulkan.CheckCubeFaceStorageExpansion();
+  vulkan.CheckCubeFaceStorage();
   if (rasterization) {
     vulkan.CheckGraphicsPushConstantBank();
     vulkan.CheckRenderExecutorColorDiscovery();

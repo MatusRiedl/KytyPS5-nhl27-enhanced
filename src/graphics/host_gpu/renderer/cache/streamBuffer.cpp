@@ -7,6 +7,10 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/commandScheduler.h"
 
+#include <atomic>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <vk_mem_alloc.h>
@@ -17,6 +21,25 @@ namespace {
 
 constexpr size_t WATCHES_INITIAL_RESERVE = 0x4000;
 constexpr size_t WATCHES_RESERVE_CHUNK   = 0x1000;
+
+// Set once a dedicated allocation fails (see Buffer::Buffer): later buffers skip straight to VMA's
+// shared blocks, so each one doesn't fail first.
+std::atomic<bool> g_dedicated_exhausted {false};
+
+// Set by BufferCache::CreateBuffer around its insert: a failed allocation leaves the buffer empty
+// (Failed()) instead of exiting, so the cache can free memory and try again.
+thread_local bool g_soft_failure = false;
+
+// KYTY_DBG_FAIL_BUFFER_ALLOC=N (test only): the Nth game buffer the cache creates fails once, so
+// BufferCache::CreateBuffer's out-of-memory retry can be checked without filling video memory.
+[[nodiscard]] bool InjectAllocationFailure() {
+	static const uint64_t   fail_at = [] {
+		const char* value = std::getenv("KYTY_DBG_FAIL_BUFFER_ALLOC");
+		return value != nullptr ? std::strtoull(value, nullptr, 10) : uint64_t {0};
+	}();
+	static std::atomic<uint64_t> created {0};
+	return fail_at != 0 && created.fetch_add(1, std::memory_order_relaxed) + 1 == fail_at;
+}
 
 [[nodiscard]] VmaAllocationCreateFlags AllocationFlags(MemoryUsage usage) {
 	switch (usage) {
@@ -81,7 +104,9 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 	const bool pooled = with_bda && size <= PooledBdaLimit &&
 	                    Common::Experiments::Enabled(Common::Experiments::PooledBdaBuffers);
 	const VmaAllocationCreateFlags bda_flag =
-	    with_bda && !pooled ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
+	    with_bda && !pooled && !g_dedicated_exhausted.load(std::memory_order_relaxed)
+	        ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
+	        : 0;
 
 	VmaAllocationCreateInfo allocation_info {};
 	// Experiment DirectGpuReads: game buffers go to CPU-visible video memory when the driver offers
@@ -102,11 +127,59 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 
 	VmaAllocationInfo allocation_result {};
 	VkBuffer          native_buffer = VK_NULL_HANDLE;
-	const auto        result        = static_cast<vk::Result>(vmaCreateBuffer(
-	    graphics.allocator, static_cast<const VkBufferCreateInfo*>(buffer_info), &allocation_info,
-	    &native_buffer, &m_allocation, &allocation_result));
+	const auto        create        = [&] {
+		return static_cast<vk::Result>(vmaCreateBuffer(
+		    graphics.allocator, static_cast<const VkBufferCreateInfo*>(buffer_info),
+		    &allocation_info, &native_buffer, &m_allocation, &allocation_result));
+	};
+	if (g_soft_failure && InjectAllocationFailure()) {
+		printf("Buffer: injected allocation failure of %" PRIu64 " bytes (KYTY_DBG_FAIL_BUFFER_ALLOC)\n", size);
+		m_allocation = nullptr;
+		return;
+	}
+	auto result = create();
 	if (result != vk::Result::eSuccess) {
+		// VMA reports ErrorOutOfDeviceMemory both when over budget and when the driver's cap on
+		// the number of device memory objects (maxMemoryAllocationCount, 4096 on NVIDIA) is
+		// reached: every game buffer is a dedicated allocation, so long sessions hit the cap with
+		// gigabytes still free (user log 2026-11-08: 10.2 of 15.9 GB used). Retry in order:
+		// 1) share VMA's blocks instead of a dedicated allocation (needs no new memory object
+		//    while a block has room), 2) give back the images kept for reuse, 3) allow going over
+		//    budget (Windows pages video memory: slower, but the game keeps running).
+		printf("Buffer: allocation of %" PRIu64 " bytes failed (%s, dedicated=%d), retrying\n", size,
+		       vk::to_string(result).c_str(), bda_flag != 0 ? 1 : 0);
 		graphics.LogMemoryBudget();
+		const char* step = "pooled";
+		allocation_info.flags &= ~VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+		result = create();
+		printf("Buffer: retry pooled: %s\n", vk::to_string(result).c_str());
+		if (result == vk::Result::eSuccess && bda_flag != 0) {
+			g_dedicated_exhausted.store(true, std::memory_order_relaxed);
+			printf("Buffer: dedicated allocations exhausted, new game buffers now share VMA blocks\n");
+		}
+		if (result != vk::Result::eSuccess) {
+			step = "recycled images freed";
+			graphics.ReleaseRecycledImages();
+			result = create();
+			printf("Buffer: retry recycled images freed: %s\n", vk::to_string(result).c_str());
+		}
+		if (result != vk::Result::eSuccess) {
+			step = "over budget";
+			allocation_info.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+			result = create();
+			printf("Buffer: retry over budget: %s\n", vk::to_string(result).c_str());
+		}
+		printf("Buffer: retry %s (%s)\n", result == vk::Result::eSuccess ? "succeeded" : "failed",
+		       step);
+		if (result != vk::Result::eSuccess) {
+			graphics.LogMemoryBudget();
+		}
+		fflush(stdout);
+	}
+	if (result != vk::Result::eSuccess && g_soft_failure) {
+		// BufferCache::CreateBuffer frees finished work and retries; Failed() is true.
+		m_allocation = nullptr;
+		return;
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
@@ -131,6 +204,10 @@ Buffer::~Buffer() {
 	if (m_buffer != nullptr) {
 		vmaDestroyBuffer(m_graphics->allocator, m_buffer, m_allocation);
 	}
+}
+
+void Buffer::AllowSoftFailure(bool allow) noexcept {
+	g_soft_failure = allow;
 }
 
 vk::DeviceAddress Buffer::BufferDeviceAddress() const noexcept {

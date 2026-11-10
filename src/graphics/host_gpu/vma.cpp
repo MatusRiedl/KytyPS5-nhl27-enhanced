@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 
@@ -115,12 +116,26 @@ void GraphicContext::LogMemoryBudget() const {
 	const auto& properties = GetPhysicalDeviceMemoryProperties();
 	VmaBudget   budgets[VK_MAX_MEMORY_HEAPS] {};
 	vmaGetHeapBudgets(allocator, budgets);
+	uint64_t memory_objects = 0;
 	for (uint32_t i = 0; i < properties.memoryHeapCount; i++) {
-		LOGF("VMA heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
-		     ", blocks=%" PRIu64 "\n",
-		     i, static_cast<uint64_t>(budgets[i].usage), static_cast<uint64_t>(budgets[i].budget),
-		     static_cast<uint64_t>(budgets[i].statistics.allocationBytes),
-		     static_cast<uint64_t>(budgets[i].statistics.blockBytes));
+		// printf, not LOGF: LOGF is silent by default and these lines explain allocation failures.
+		printf("VMA heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
+		       ", blocks=%" PRIu64 ", block_count=%u, allocation_count=%u\n",
+		       i, static_cast<uint64_t>(budgets[i].usage), static_cast<uint64_t>(budgets[i].budget),
+		       static_cast<uint64_t>(budgets[i].statistics.allocationBytes),
+		       static_cast<uint64_t>(budgets[i].statistics.blockBytes),
+		       budgets[i].statistics.blockCount, budgets[i].statistics.allocationCount);
+		memory_objects += budgets[i].statistics.blockCount;
+	}
+	// Every VMA block and every dedicated allocation is one VkDeviceMemory object; the driver
+	// refuses new ones past maxMemoryAllocationCount even with memory free.
+	printf("VMA memory objects: %" PRIu64 " of maxMemoryAllocationCount=%u\n", memory_objects,
+	       physical_device.getProperties().limits.maxMemoryAllocationCount);
+}
+
+void GraphicContext::ReleaseRecycledImages() {
+	if (allocator != nullptr) {
+		DestroyRecycledImages(allocator);
 	}
 }
 

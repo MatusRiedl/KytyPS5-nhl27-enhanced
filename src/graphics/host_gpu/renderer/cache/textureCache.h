@@ -43,30 +43,6 @@ namespace BcAlias {
 void Resolve(TextureCache& cache, ImageId cached, ImageId merged);
 } // namespace BcAlias
 
-// What the ResolveOverlap tail does with a partial overlap (ported from duy64 opt/nhl27-tailfix).
-// Pure, so tests/TextureCacheOverlapTests.cpp can check it without a Vulkan device.
-// Precondition: every earlier ResolveOverlap branch failed. `requested` is ResolveOverlap's first
-// argument: the merged image's info when there is a prior resolution.
-enum class OverlapPlanBranch : uint8_t { TailFallThrough, MergedCopy };
-
-struct OverlapPlan {
-	OverlapPlanBranch branch = OverlapPlanBranch::TailFallThrough;
-	// Every MergedCopy guard holds except the base address (an offset alias). Not acted on: copying
-	// at an offset needs a region copy that does not exist yet.
-	bool fix_eligible = false;
-};
-
-// MergedCopy needs a prior resolution, a non-speculative lookup, a safe free, the same base
-// address, samples, color transform and type, and a direct copy (same format, or both non-depth
-// with the same block size).
-[[nodiscard]] OverlapPlan PlanOverlapCopy(const ImageInfo& requested, const ImageInfo& cached,
-                                          bool merged_present, bool speculative,
-                                          bool safe_to_delete);
-
-// Older than NumFramesBeforeRemoval ticks (strictly) and no heap references.
-[[nodiscard]] bool OverlapSafeToDelete(uint64_t current_tick, uint64_t tick_accessed_last,
-                                       uint32_t heap_refs) noexcept;
-
 // P14 diagnostic: true the first time this log line sees (address, width, width).
 [[nodiscard]] bool NoteExtentPairOnce(const char* line, uint64_t address, uint32_t width_a,
                                       uint32_t width_b);

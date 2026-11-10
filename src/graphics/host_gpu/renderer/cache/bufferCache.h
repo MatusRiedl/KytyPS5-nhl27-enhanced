@@ -34,6 +34,16 @@ class TextureCache;
 using BufferId = Common::SlotId;
 inline constexpr BufferId NULL_BUFFER_ID {0};
 
+// NHL27MEM (printed every 30 s by swapchain.cpp): the game buffers alive now, their bytes, the
+// largest created since the last call (reset by the call), and out-of-memory retries so far.
+struct BufferMemoryStats {
+	uint64_t buffers = 0;
+	uint64_t bytes   = 0;
+	uint64_t largest = 0;
+	uint64_t retries = 0;
+};
+[[nodiscard]] BufferMemoryStats BufferCacheMemoryStats();
+
 class BufferCache {
 public:
 	static constexpr uint32_t CACHING_PAGEBITS  = 14;

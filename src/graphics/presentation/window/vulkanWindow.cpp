@@ -1325,6 +1325,21 @@ void WindowContext::CreateVulkan() {
 	const auto& device_properties = graphic_ctx.GetPhysicalDeviceProperties();
 
 	LOGF("Select device: %s\n", device_properties.deviceName.data());
+	{
+		// Always in the log: tester crash reports need the GPU and driver.
+		const uint32_t v = device_properties.driverVersion;
+		if (device_properties.vendorID == 0x10DE) { // NVIDIA: 10.8.8.6 bits
+			std::printf("GPU: %s, driver %u.%02u, VRAM heap0 %llu MB\n", device_properties.deviceName.data(),
+			            (v >> 22u) & 0x3ffu, (v >> 14u) & 0xffu,
+			            static_cast<unsigned long long>(
+			                graphic_ctx.physical_device_memory_properties.memoryHeaps[0].size >> 20u));
+		} else {
+			std::printf("GPU: %s, vendor 0x%04x, driver 0x%08x, VRAM heap0 %llu MB\n",
+			            device_properties.deviceName.data(), device_properties.vendorID, v,
+			            static_cast<unsigned long long>(
+			                graphic_ctx.physical_device_memory_properties.memoryHeaps[0].size >> 20u));
+		}
+	}
 
 	const vk::PhysicalDeviceImageFormatInfo2 block_texel_view_info {
 	    .format = vk::Format::eBc1RgbaUnormBlock,
