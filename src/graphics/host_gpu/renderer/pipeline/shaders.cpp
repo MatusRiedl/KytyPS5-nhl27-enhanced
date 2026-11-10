@@ -804,6 +804,10 @@ void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& p
 		info.flags |= vk::PipelineCreateFlagBits::eCaptureStatisticsKHR |
 		              vk::PipelineCreateFlagBits::eCaptureInternalRepresentationsKHR;
 	}
+	// Names the shader if the driver's compiler crashes inside the call (tester log 2026-11-08:
+	// access violation in nvoglv64 under vkCreateComputePipelines with an empty cache).
+	std::printf("NHL27PIPE compiling CS 0x%016llx\n", static_cast<unsigned long long>(stats_cs));
+	std::fflush(stdout);
 	result = graphics.device.createComputePipelines(stats ? nullptr : driver_cache, 1, &info, nullptr,
 	                                                &pipeline.pipeline);
 	if (stats && result == vk::Result::eSuccess) {

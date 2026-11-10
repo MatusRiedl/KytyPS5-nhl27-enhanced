@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 
@@ -116,11 +117,18 @@ void GraphicContext::LogMemoryBudget() const {
 	VmaBudget   budgets[VK_MAX_MEMORY_HEAPS] {};
 	vmaGetHeapBudgets(allocator, budgets);
 	for (uint32_t i = 0; i < properties.memoryHeapCount; i++) {
-		LOGF("VMA heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
-		     ", blocks=%" PRIu64 "\n",
-		     i, static_cast<uint64_t>(budgets[i].usage), static_cast<uint64_t>(budgets[i].budget),
-		     static_cast<uint64_t>(budgets[i].statistics.allocationBytes),
-		     static_cast<uint64_t>(budgets[i].statistics.blockBytes));
+		// printf, not LOGF: LOGF is silent by default and these lines explain allocation failures.
+		printf("VMA heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
+		       ", blocks=%" PRIu64 "\n",
+		       i, static_cast<uint64_t>(budgets[i].usage), static_cast<uint64_t>(budgets[i].budget),
+		       static_cast<uint64_t>(budgets[i].statistics.allocationBytes),
+		       static_cast<uint64_t>(budgets[i].statistics.blockBytes));
+	}
+}
+
+void GraphicContext::ReleaseRecycledImages() {
+	if (allocator != nullptr) {
+		DestroyRecycledImages(allocator);
 	}
 }
 

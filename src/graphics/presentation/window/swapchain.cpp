@@ -509,6 +509,9 @@ void Swapchain::Create() {
 	RequireVulkanSuccess(graphics.device.createSwapchainKHR(&create_info, nullptr, &m_handle),
 	                     "vkCreateSwapchainKHR");
 	EXIT_IF(m_handle == nullptr);
+	// Brackets the call above: a tester log (2026-11-10) ended right after the present-mode line with no error block.
+	std::printf("NHL27VIDEO: swapchain created\n");
+	std::fflush(stdout);
 	LOGF("Vulkan presentation: %s\n", m_hdr_active ? "HDR10 (PQ)" : "SDR");
 
 	m_images = EnumerateVulkan<vk::Image>(
