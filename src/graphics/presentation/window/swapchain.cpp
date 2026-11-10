@@ -10,6 +10,7 @@
 #include "gpu_blit_shaders/gpu_blit_fs_triangle_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_overlay_spv.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/renderer/cache/bufferCache.h"
 #include "graphics/host_gpu/renderer/frameDump.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -1134,7 +1135,7 @@ struct PresentCapture {
 // every 5 s NHL27FRAMETIME prints the average and the 1% / 0.1% low fps plus the longest frame,
 // and each frame longer than 40 ms prints NHL27HITCH (t = seconds, as in NHL27FPS t=). miss_ms sums how far
 // the frames over 40 ms ran past a 30 Hz frame (33.3 ms): the time lost to missed vblanks.
-static void TrackPresentInterval() {
+static void TrackPresentInterval(const GraphicContext& graphics) {
 	static std::vector<float> window_ms;
 	static auto               last         = std::chrono::steady_clock::now();
 	static auto               window_begin = last;
@@ -1171,6 +1172,22 @@ static void TrackPresentInterval() {
 	            1000.0 * static_cast<double>(sorted.size()) / span_ms, low_fps(0.01), low_fps(0.001),
 	            static_cast<double>(sorted.front()), static_cast<long long>(over(20.0f)), static_cast<long long>(over(34.0f)),
 	            static_cast<long long>(over(50.0f)), static_cast<long long>(over(40.0f)), miss_ms);
+	// NHL27MEM every 30 s: video memory in use against the budget, and the buffer cache's game
+	// buffers (count, bytes, largest created since the last line, out-of-memory retries), to tell
+	// a leak (bytes keep rising) from one oversized buffer.
+	static auto last_mem = now;
+	if (now - last_mem >= std::chrono::seconds(30)) {
+		last_mem = now;
+		const auto stats = BufferCacheMemoryStats();
+		std::printf("NHL27MEM t=%llu vram_used_mb=%llu budget_mb=%llu buffers=%llu buffer_mb=%llu largest_mb=%llu "
+		            "retries=%llu\n",
+		            static_cast<unsigned long long>(SDL_GetTicks() / 1000),
+		            static_cast<unsigned long long>(graphics.GetDeviceMemoryUsage() >> 20u),
+		            static_cast<unsigned long long>(graphics.GetTotalMemoryBudget() >> 20u),
+		            static_cast<unsigned long long>(stats.buffers), static_cast<unsigned long long>(stats.bytes >> 20u),
+		            static_cast<unsigned long long>(stats.largest >> 20u),
+		            static_cast<unsigned long long>(stats.retries));
+	}
 	std::fflush(stdout);
 	window_ms.clear();
 }
@@ -1334,7 +1351,7 @@ void Presenter::Impl::Present() {
 
 		presented_overlay_revision.store(overlay_visual.revision, std::memory_order_release);
 		window.loop.presented_frames.fetch_add(1, std::memory_order_relaxed);
-		TrackPresentInterval();
+		TrackPresentInterval(window.graphic_ctx);
 		return;
 	}
 	LOGF("Vulkan presentation retry exhausted; dropping frame\n");

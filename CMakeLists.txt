@@ -135,6 +135,25 @@ else()
 	message(FATAL_ERROR "only Clang and GCC are supported; found ${CMAKE_CXX_COMPILER_ID}")
 endif()
 
+# Release exes must not carry the build machine's folders: __FILE__ (assert messages, logs) is
+# written relative to the source tree (.\src\...), and the PDB is named without its folder.
+# -fmacro-prefix-map only, not -ffile-prefix-map, so PGO's names for static functions stay as the
+# profile recorded them. Both slash forms: clang sees backslash paths from Ninja on Windows.
+if (CLANG OR GCC)
+	file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" KYTY_SOURCE_DIR_NATIVE)
+	file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" KYTY_SOURCE_DIR_CMAKE)
+	if (KYTY_CLANG_CL)
+		set(KYTY_PREFIX_MAP_FLAG "/clang:-fmacro-prefix-map=")
+	else()
+		set(KYTY_PREFIX_MAP_FLAG "-fmacro-prefix-map=")
+	endif()
+	add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:${KYTY_PREFIX_MAP_FLAG}${KYTY_SOURCE_DIR_NATIVE}=.>"
+		"$<$<COMPILE_LANGUAGE:C,CXX>:${KYTY_PREFIX_MAP_FLAG}${KYTY_SOURCE_DIR_CMAKE}=.>")
+	if (KYTY_CLANG_CL)
+		add_link_options("/PDBALTPATH:%_PDB%")
+	endif()
+endif()
+
 set(KYTY_PROJECT_NAME "Emulator" CACHE STRING "Project name suffix")
 
 string(TOLOWER ${KYTY_COMPILER} KYTY_COMPILER_ID)

@@ -42,6 +42,10 @@ public:
 	~Buffer();
 	KYTY_CLASS_NO_COPY(Buffer);
 
+	// While allowed (this thread only), a failed allocation leaves the buffer empty (Failed())
+	// instead of exiting. Only BufferCache::CreateBuffer uses it, to free memory and retry.
+	static void                      AllowSoftFailure(bool allow) noexcept;
+	[[nodiscard]] bool               Failed() const noexcept { return m_buffer == nullptr; }
 	[[nodiscard]] vk::Buffer         Handle() const noexcept { return m_buffer; }
 	[[nodiscard]] uint64_t           Size() const noexcept { return m_size; }
 	[[nodiscard]] std::span<uint8_t> Mapped() const noexcept { return m_mapped; }

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <vk_mem_alloc.h>
@@ -24,6 +25,21 @@ constexpr size_t WATCHES_RESERVE_CHUNK   = 0x1000;
 // Set once a dedicated allocation fails (see Buffer::Buffer): later buffers skip straight to VMA's
 // shared blocks, so each one doesn't fail first.
 std::atomic<bool> g_dedicated_exhausted {false};
+
+// Set by BufferCache::CreateBuffer around its insert: a failed allocation leaves the buffer empty
+// (Failed()) instead of exiting, so the cache can free memory and try again.
+thread_local bool g_soft_failure = false;
+
+// KYTY_DBG_FAIL_BUFFER_ALLOC=N (test only): the Nth game buffer the cache creates fails once, so
+// BufferCache::CreateBuffer's out-of-memory retry can be checked without filling video memory.
+[[nodiscard]] bool InjectAllocationFailure() {
+	static const uint64_t   fail_at = [] {
+		const char* value = std::getenv("KYTY_DBG_FAIL_BUFFER_ALLOC");
+		return value != nullptr ? std::strtoull(value, nullptr, 10) : uint64_t {0};
+	}();
+	static std::atomic<uint64_t> created {0};
+	return fail_at != 0 && created.fetch_add(1, std::memory_order_relaxed) + 1 == fail_at;
+}
 
 [[nodiscard]] VmaAllocationCreateFlags AllocationFlags(MemoryUsage usage) {
 	switch (usage) {
@@ -116,6 +132,11 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 		    graphics.allocator, static_cast<const VkBufferCreateInfo*>(buffer_info),
 		    &allocation_info, &native_buffer, &m_allocation, &allocation_result));
 	};
+	if (g_soft_failure && InjectAllocationFailure()) {
+		printf("Buffer: injected allocation failure of %" PRIu64 " bytes (KYTY_DBG_FAIL_BUFFER_ALLOC)\n", size);
+		m_allocation = nullptr;
+		return;
+	}
 	auto result = create();
 	if (result != vk::Result::eSuccess) {
 		// VMA reports ErrorOutOfDeviceMemory both when over budget and when the driver's cap on
@@ -131,6 +152,7 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 		const char* step = "pooled";
 		allocation_info.flags &= ~VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 		result = create();
+		printf("Buffer: retry pooled: %s\n", vk::to_string(result).c_str());
 		if (result == vk::Result::eSuccess && bda_flag != 0) {
 			g_dedicated_exhausted.store(true, std::memory_order_relaxed);
 			printf("Buffer: dedicated allocations exhausted, new game buffers now share VMA blocks\n");
@@ -139,14 +161,25 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 			step = "recycled images freed";
 			graphics.ReleaseRecycledImages();
 			result = create();
+			printf("Buffer: retry recycled images freed: %s\n", vk::to_string(result).c_str());
 		}
 		if (result != vk::Result::eSuccess) {
 			step = "over budget";
 			allocation_info.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
 			result = create();
+			printf("Buffer: retry over budget: %s\n", vk::to_string(result).c_str());
 		}
 		printf("Buffer: retry %s (%s)\n", result == vk::Result::eSuccess ? "succeeded" : "failed",
 		       step);
+		if (result != vk::Result::eSuccess) {
+			graphics.LogMemoryBudget();
+		}
+		fflush(stdout);
+	}
+	if (result != vk::Result::eSuccess && g_soft_failure) {
+		// BufferCache::CreateBuffer frees finished work and retries; Failed() is true.
+		m_allocation = nullptr;
+		return;
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
@@ -171,6 +204,10 @@ Buffer::~Buffer() {
 	if (m_buffer != nullptr) {
 		vmaDestroyBuffer(m_graphics->allocator, m_buffer, m_allocation);
 	}
+}
+
+void Buffer::AllowSoftFailure(bool allow) noexcept {
+	g_soft_failure = allow;
 }
 
 vk::DeviceAddress Buffer::BufferDeviceAddress() const noexcept {
