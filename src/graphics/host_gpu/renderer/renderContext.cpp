@@ -144,7 +144,15 @@ bool RenderContext::HandleFault(PageFaultAccess access, uint64_t fault_vaddr) no
 			static const uint64_t wide_window = [] {
 				const char* value = std::getenv("KYTY_FAULT_COALESCE_PAGES");
 				const auto  pages = value != nullptr ? std::strtoull(value, nullptr, 10) : 16ull;
-				return std::bit_ceil(std::clamp<uint64_t>(pages, 1, 256)) * TRACKER_PAGE_SIZE;
+				const auto  used  = std::bit_ceil(std::clamp<uint64_t>(pages, 1, 256));
+				if (FrameBreakdown::Enabled()) {
+					// Once, at the first coalesced fault: which window this run used (KYTY_PERF_STATS=1).
+					std::printf("NHL27FAULTWIN pages=%llu kib=%llu wide=%d\n", static_cast<unsigned long long>(used),
+					            static_cast<unsigned long long>(used * TRACKER_PAGE_SIZE / 1024),
+					            Common::Experiments::Enabled(Common::Experiments::WideFaultWindows) ? 1 : 0);
+					std::fflush(stdout);
+				}
+				return used * TRACKER_PAGE_SIZE;
 			}();
 			// Experiment WideFaultWindows off: 4-page windows. NHL 27 faults ~200 times per frame and
 			// the 16-page windows upload ~11 MB per frame, mostly unwritten neighbors.
