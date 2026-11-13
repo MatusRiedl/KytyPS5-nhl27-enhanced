@@ -319,6 +319,7 @@ private:
 	uint64_t         m_image_set_epoch        = 0;
 	bool             m_stencil_own_plane      = false; // tests; KYTY_STENCIL_OWN_PLANE=1 in the game
 	bool             m_htile_owner_rule       = false; // tests; KYTY_HTILE_OWNER=1 in the game
+	bool             m_gc_free_budget         = false; // tests; KYTY_TEXTURE_GC_BUDGET=1 in the game
 	bool             m_readback_linear_images = false;
 	// Set while an overlap/alias resolution frees an image; only those frees write back.
 	bool             m_alias_free_in_progress = false;
