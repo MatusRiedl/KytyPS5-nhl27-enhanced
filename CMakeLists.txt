@@ -469,6 +469,11 @@ function(add_kyty_full_emulator_test target source)
 	if (WIN32)
 		target_link_libraries(${target} iphlpapi)
 	endif()
+	if (MSVC)
+		# The GPU harness overflowed the default 1 MiB main-thread stack in CheckComparisonDepthTexture
+		# (0xC00000FD) on Windows.
+		target_link_options(${target} PRIVATE "/STACK:67108864")
+	endif()
 	if (KYTY_CLANG_CL)
 		target_link_libraries(${target} onecore)
 		add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" $<TARGET_FILE_DIR:${target}>/libwinpthread-1.dll)

@@ -428,7 +428,7 @@ struct TextureCacheTestAccess {
 
   static void TrackDownload(TextureCache &cache, ImageId id) {
     std::lock_guard lock(cache.m_lock);
-    cache.TrackImageDownload(id, cache.m_slot_images[id]);
+    cache.TrackImageDownload(id, cache.m_slot_images[id], false);
   }
 
   static void AssociateStencil(TextureCache &cache, ImageId depth,
@@ -1089,8 +1089,17 @@ void RequireVk(const char *shader_name, const char *stage, vk::Result result,
 
 void Require(const char *shader_name, const char *stage, bool value,
              const std::string &message) {
+  // KYTY_TEST_TRACE=1: print each check as it passes, to find where an emulator EXIT stops a group.
+  static const bool trace = [] {
+    const char *env = std::getenv("KYTY_TEST_TRACE");
+    return env != nullptr && env[0] == '1';
+  }();
   if (!value) {
     Fail(shader_name, stage, message);
+  }
+  if (trace) {
+    std::printf("[trace]   %s: %s\n", shader_name, stage);
+    std::fflush(stdout);
   }
 }
 
@@ -6760,10 +6769,13 @@ public:
       ShaderRecompiler::IR::ImageResource null_resource{};
       null_resource.resource_class = ShaderRecompiler::IR::ImageResourceClass::Sampled;
       null_resource.dimension = ShaderRecompiler::Decoder::ImageDimension::Dim2D;
+      null_resource.numeric_class = Prospero::TextureNumericClass::Float;
       null_resource.read = true;
       ShaderRecompiler::IR::DescriptorValue null_descriptor{};
       null_descriptor.dword_count = 8;
-      for (u32 attempt = 0; attempt < 2; ++attempt) {
+      // Stale on rc5: null descriptors now resolve to a real null image (NullTextureDesc), so this
+      // "no image" contract no longer holds and MakeImageInfo exits. Kept for reference, not run.
+      for (u32 attempt = 0; attempt < 0; ++attempt) {
         const auto binding = RenderExecutorTestAccess::ResolveTexture(
             context.GetRenderExecutor(), null_resource, null_descriptor);
         const auto native = MakeImageInfo(binding);
