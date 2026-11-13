@@ -34,7 +34,7 @@ int main() {
 	// silently flipped the other. kAllBits lives in experiments.h (which also
 	// static_asserts this at compile time); bump kExpectedBitCount when a bit
 	// is added, and add it to kAllBits, or this test fails.
-	constexpr size_t kExpectedBitCount = 58;
+	constexpr size_t kExpectedBitCount = 59;
 	if (sizeof(kAllBits) / sizeof(*kAllBits) != kExpectedBitCount) {
 		std::fprintf(stderr, "kAllBits has %zu entries, expected %zu: a bit was added to the enum without updating it\n",
 		             sizeof(kAllBits) / sizeof(*kAllBits), kExpectedBitCount);

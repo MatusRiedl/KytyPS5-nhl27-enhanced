@@ -1928,8 +1928,9 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 				return;
 			}
 			auto& buffer = m_slot_buffers[FindBuffer(vaddr, size)];
+			const bool writer_done = buffer.last_write_tick == 0 || m_scheduler.IsFree(buffer.last_write_tick);
 			if (split && attempt == 0) {
-				trace.writer_done = buffer.last_write_tick == 0 || m_scheduler.IsFree(buffer.last_write_tick);
+				trace.writer_done = writer_done;
 			}
 			// KYTY_READBACK_WINDOW_KIB=<n> (upstream 1d5c8787 uses 512; default 0 = off): a read of
 			// GPU-written bytes widens to the aligned n KiB window of its buffer, on the asynchronous guest
@@ -1942,7 +1943,10 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 				WidenReadback(buffer.CpuAddress(), buffer.Size(), ReadbackWindowBytes(),
 				              m_gpu_modified_ranges.Intersects(vaddr, size), read_vaddr, read_size);
 			}
-			if (!is_write && !on_gpu && Common::Experiments::Enabled(Common::Experiments::AsyncGuestReads)) {
+			// Experiment AsyncReadDoneSync: a finished writer needs no place in the main queue; the
+			// sync path below copies on the second queue while the main queue goes on.
+			if (!is_write && !on_gpu && Common::Experiments::Enabled(Common::Experiments::AsyncGuestReads) &&
+			    !(writer_done && Common::Experiments::Enabled(Common::Experiments::AsyncReadDoneSync))) {
 				// The download covers whole tracker pages; so does the pending record. The bytes it
 				// carries are the GPU-written ones of those pages.
 				const auto first = read_vaddr & ~(TRACKER_PAGE_SIZE - 1);
