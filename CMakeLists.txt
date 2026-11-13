@@ -586,6 +586,8 @@ add_executable(experiments_tests EXCLUDE_FROM_ALL
 	"${KYTY_SOURCE_DIR}/common/threads.cpp"
 )
 target_include_directories(experiments_tests PRIVATE "${KYTY_SOURCE_DIR}")
+# emulatorConfig.cpp and threads.cpp use EXIT and fmt (assert.cpp is in common).
+target_link_libraries(experiments_tests PRIVATE fmt::fmt common)
 if(LINUX OR APPLE)
 	target_link_libraries(experiments_tests PRIVATE Threads::Threads)
 endif()
