@@ -418,6 +418,12 @@ struct TextureCacheTestAccess {
     cache.DeleteImage(id);
   }
 
+  // The garbage collector's release path: drops GPU-modified state, then deletes.
+  static void FreeImage(TextureCache &cache, ImageId id) {
+    std::lock_guard lock(cache.m_lock);
+    cache.FreeImage(id);
+  }
+
   static const Image *Owner(const TextureCache &cache, ImageId id) {
     return cache.m_slot_images.try_get(id);
   }
@@ -428,7 +434,7 @@ struct TextureCacheTestAccess {
 
   static void TrackDownload(TextureCache &cache, ImageId id) {
     std::lock_guard lock(cache.m_lock);
-    cache.TrackImageDownload(id, cache.m_slot_images[id]);
+    cache.TrackImageDownload(id, cache.m_slot_images[id], false);
   }
 
   static void AssociateStencil(TextureCache &cache, ImageId depth,
@@ -439,6 +445,14 @@ struct TextureCacheTestAccess {
 
   static void SetLinearReadback(TextureCache &cache, bool enabled) {
     cache.m_readback_linear_images = enabled;
+  }
+
+  static void SetStencilOwnPlane(TextureCache &cache, bool enabled) {
+    cache.m_stencil_own_plane = enabled;
+  }
+
+  static void SetHtileOwnerRule(TextureCache &cache, bool enabled) {
+    cache.m_htile_owner_rule = enabled;
   }
 
   static std::pair<uint8_t *, uint64_t>
@@ -1089,8 +1103,17 @@ void RequireVk(const char *shader_name, const char *stage, vk::Result result,
 
 void Require(const char *shader_name, const char *stage, bool value,
              const std::string &message) {
+  // KYTY_TEST_TRACE=1: print each check as it passes, to find where an emulator EXIT stops a group.
+  static const bool trace = [] {
+    const char *env = std::getenv("KYTY_TEST_TRACE");
+    return env != nullptr && env[0] == '1';
+  }();
   if (!value) {
     Fail(shader_name, stage, message);
+  }
+  if (trace) {
+    std::printf("[trace]   %s: %s\n", shader_name, stage);
+    std::fflush(stdout);
   }
 }
 
@@ -6760,10 +6783,13 @@ public:
       ShaderRecompiler::IR::ImageResource null_resource{};
       null_resource.resource_class = ShaderRecompiler::IR::ImageResourceClass::Sampled;
       null_resource.dimension = ShaderRecompiler::Decoder::ImageDimension::Dim2D;
+      null_resource.numeric_class = Prospero::TextureNumericClass::Float;
       null_resource.read = true;
       ShaderRecompiler::IR::DescriptorValue null_descriptor{};
       null_descriptor.dword_count = 8;
-      for (u32 attempt = 0; attempt < 2; ++attempt) {
+      // Stale on rc5: null descriptors now resolve to a real null image (NullTextureDesc), so this
+      // "no image" contract no longer holds and MakeImageInfo exits. Kept for reference, not run.
+      for (u32 attempt = 0; attempt < 0; ++attempt) {
         const auto binding = RenderExecutorTestAccess::ResolveTexture(
             context.GetRenderExecutor(), null_resource, null_descriptor);
         const auto native = MakeImageInfo(binding);
@@ -7958,6 +7984,21 @@ public:
               "CPU invalidation left a reused stencil image write-protected");
       memory[second_stencil_offset] = 0x5a;
 
+      // Upstream 84419aef, behind KYTY_STENCIL_OWN_PLANE: another image at the
+      // plane's range is not adopted while the depth keeps its own plane record.
+      {
+        TextureCacheTestAccess::SetStencilOwnPlane(texture_cache, true);
+        const auto other_image = TextureCacheTestAccess::InsertImage(
+            texture_cache, stencil_storage_desc.info);
+        TextureCacheTestAccess::AssociateStencil(
+            texture_cache, switched_ms_depth_id, switched_ms_depth.info.stencil);
+        Require(name, "stencil re-association keeps its plane record",
+                !texture_cache.GetImage(other_image).depth_id,
+                "re-association adopted another image at the stencil range");
+        TextureCacheTestAccess::DeleteImage(texture_cache, other_image);
+        TextureCacheTestAccess::SetStencilOwnPlane(texture_cache, false);
+      }
+
       constexpr uint64_t added_stencil_depth_offset = 0x60000;
       constexpr uint64_t added_stencil_offset = 0x70000;
       constexpr uint64_t added_stencil_size = 0x10000;
@@ -8810,6 +8851,54 @@ public:
           name, "metadata buffer fill state",
           texture_cache.IsMetaCleared(base + metadata_b, 0),
           "BufferCache fill did not publish an exact-address metadata clear");
+
+      // Upstream 2d84e36b, behind KYTY_HTILE_OWNER: a dynamic-resolution depth
+      // target keeps its HTile range at every extent; freeing the superseded
+      // image must leave its successor's consumed clear state alone.
+      {
+        TextureCacheTestAccess::SetHtileOwnerRule(texture_cache, true);
+        constexpr uint64_t shared_htile = 0x13200;
+        auto retired_depth = MakeMetadataDepth(0x12400, shared_htile);
+        auto live_depth = MakeMetadataDepth(0x12500, shared_htile);
+        const auto retired_id = texture_cache.FindImage(retired_depth);
+        const auto live_id = texture_cache.FindImage(live_depth);
+        (void)texture_cache.FindDepthTarget(retired_id, retired_depth);
+        (void)texture_cache.FindDepthTarget(live_id, live_depth);
+        const bool live_consumed =
+            texture_cache.TouchMeta(base + shared_htile, 0, false);
+        TextureCacheTestAccess::FreeImage(texture_cache, retired_id);
+        (void)texture_cache.FindDepthTarget(live_id, live_depth);
+        Require(name, "superseded HTile image release",
+                live_consumed &&
+                    !texture_cache.IsMetaCleared(base + shared_htile, 0),
+                "freeing a superseded depth image re-armed its successor's "
+                "HTile clear");
+        TextureCacheTestAccess::FreeImage(texture_cache, live_id);
+        Require(name, "HTile owner release",
+                !texture_cache.IsMeta(base + shared_htile),
+                "freeing the HTile owner kept its clear state");
+        TextureCacheTestAccess::SetHtileOwnerRule(texture_cache, false);
+
+        // Control, switch off (RC5 rule): the same sequence re-arms or drops
+        // the successor's state, so the check above discriminates.
+        constexpr uint64_t control_htile = 0x13600;
+        auto control_retired = MakeMetadataDepth(0x12600, control_htile);
+        auto control_live = MakeMetadataDepth(0x12700, control_htile);
+        const auto control_retired_id = texture_cache.FindImage(control_retired);
+        const auto control_live_id = texture_cache.FindImage(control_live);
+        (void)texture_cache.FindDepthTarget(control_retired_id, control_retired);
+        (void)texture_cache.FindDepthTarget(control_live_id, control_live);
+        const bool control_consumed =
+            texture_cache.TouchMeta(base + control_htile, 0, false);
+        TextureCacheTestAccess::FreeImage(texture_cache, control_retired_id);
+        Require(name, "HTile release control (switch off)",
+                control_consumed &&
+                    !texture_cache.IsMeta(base + control_htile),
+                "with KYTY_HTILE_OWNER off, freeing the superseded image "
+                "no longer drops the shared HTile state; the owner test "
+                "does not discriminate");
+        TextureCacheTestAccess::FreeImage(texture_cache, control_live_id);
+      }
 
       // R-Type Final 3 reuses an old color allocation inside a new stencil plane,
       // with the same metadata address changing from DCC to HTile.
@@ -15518,6 +15607,32 @@ public:
           (void)RenderExecutorTestAccess::ResolveTexture(executor, storage_resource, tail);
         });
 #endif
+      }
+      {
+        // PPSA28180 samples a 512x32 R32 Standard256B chain, which ends at 1x1
+        // in mip 9, with LAST_LEVEL 10; the extra level has no storage.
+        constexpr uint64_t address = base + 0x200000;
+        ShaderRecompiler::IR::DescriptorValue descriptor{};
+        descriptor.dwords = {static_cast<uint32_t>(address >> 8u),
+                             0xc1400000u,
+                             0x0007c07fu,
+                             0x90190facu,
+                             0,
+                             0x00700090u,
+                             0,
+                             0};
+        descriptor.dword_count = 8;
+        const auto chain = RenderExecutorTestAccess::ResolveTexture(
+            executor, sampled_overwide_resource, descriptor);
+        descriptor.dwords[3] += 1u << 16u;
+        const auto past = RenderExecutorTestAccess::ResolveTexture(
+            executor, sampled_overwide_resource, descriptor);
+        Require(name, "LAST_LEVEL past a complete chain",
+                past.image_id == chain.image_id &&
+                    past.desc.info.data.size == chain.desc.info.data.size &&
+                    past.desc.view_info.level_count == 10,
+                "a view past MAX_MIP of a complete chain changed its stored "
+                "layout");
       }
       auto plain_mipped_storage_binding =
           RenderExecutorTestAccess::ResolveTexture(executor, storage_resource,

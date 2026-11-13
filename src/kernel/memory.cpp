@@ -3181,11 +3181,41 @@ static int UnmapMemoryOwner(const VirtualRanges::Range& range, uint64_t vaddr, s
 	return OK;
 }
 
-static int UnmapMemoryRange(const VirtualRanges::Range& range, uint64_t vaddr, size_t len) {
-	UnmapGpuRange(vaddr, len);
-	const int result = UnmapMemoryOwner(range, vaddr, len);
-	if (result != OK && IsCommittedRangeType(range.type)) MapGpuRange(vaddr, len);
-	return result;
+// Each run of adjacent fragments is unmapped from the GPU with one call (from upstream d384084e).
+// Unlike upstream, reserved fragments stay in the runs: the GPU sees exactly the addresses it saw when every
+// fragment was unmapped on its own, only in fewer calls. UnmapGpuRange drops a range that is not wholly inside
+// one GPU address window, so a run never joins a fragment the GPU would take with one it would drop.
+static void UnmapGpuRanges(const std::vector<VirtualRanges::Range>& ranges) {
+	for (size_t i = 0; i < ranges.size(); i++) {
+		const auto start = ranges[i].start;
+		auto       end   = start + ranges[i].size;
+		const bool valid = IsGpuAddressRange(start, end - start);
+		while (i + 1 < ranges.size() && ranges[i + 1].start == end) {
+			const auto& next     = ranges[i + 1];
+			const auto  next_end = end + next.size;
+			if (IsGpuAddressRange(next.start, next.size) != valid ||
+			    IsGpuAddressRange(start, next_end - start) != valid) {
+				break;
+			}
+			end = next_end;
+			++i;
+		}
+		UnmapGpuRange(start, end - start);
+	}
+}
+
+// A failed owner leaves its fragment and every later one mapped; their GPU mapping is restored.
+static int UnmapMemoryRanges(const std::vector<VirtualRanges::Range>& ranges) {
+	UnmapGpuRanges(ranges);
+	for (auto it = ranges.begin(); it != ranges.end(); ++it) {
+		const int result = UnmapMemoryOwner(*it, it->start, it->size);
+		if (result == OK) continue;
+		for (; it != ranges.end(); ++it) {
+			if (IsCommittedRangeType(it->type)) MapGpuRange(it->start, it->size);
+		}
+		return result;
+	}
+	return OK;
 }
 
 // The ABI entry point and batch operations hold g_memory_operation_mutex.
@@ -3201,11 +3231,7 @@ static int UnmapMemory(uint64_t vaddr, size_t len) {
 	if (!g_virtual_ranges->QuerySpan(vaddr, len, &ranges)) {
 		return KERNEL_ERROR_EACCES;
 	}
-	for (const auto& range: ranges) {
-		const int result = UnmapMemoryRange(range, range.start, range.size);
-		if (result != OK) return result;
-	}
-	return OK;
+	return UnmapMemoryRanges(ranges);
 }
 
 int KYTY_SYSV_ABI KernelMunmap(uint64_t vaddr, size_t len) {
@@ -3225,18 +3251,23 @@ int UnmapAmmMemory(uint64_t vaddr, size_t size) {
 	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
 	if (!IsAmmMemoryRange(vaddr, size)) return KERNEL_ERROR_EINVAL;
 
-	const auto end = vaddr + size;
-	while (vaddr < end) {
-		VirtualRanges::Range range {};
-		// AMM unmap accepts holes, including a completely unmapped range.
-		if (!g_virtual_ranges->Query(vaddr, 1, &range) || range.start >= end) break;
-		vaddr = std::max(vaddr, range.start);
-		const auto chunk = std::min(end, range.start + range.size) - vaddr;
-		const int result = UnmapMemoryRange(range, vaddr, chunk);
-		if (result != OK) return result;
-		vaddr += chunk;
+	// AMM unmap accepts holes, including a completely unmapped range. Holes split the GPU runs.
+	const auto                        end = vaddr + size;
+	VirtualRanges::Range              range {};
+	std::vector<VirtualRanges::Range> ranges;
+	while (vaddr < end && g_virtual_ranges->Query(vaddr, 1, &range) && range.start < end) {
+		const auto start     = std::max(vaddr, range.start);
+		const auto range_end = std::min(end, range.start + range.size);
+		// UnmapMemoryOwner derives a Direct fragment's backing offset from range.offset and range.start.
+		if (range.type == VirtualRangeType::Direct) {
+			range.offset += start - range.start;
+		}
+		range.start = start;
+		range.size  = range_end - start;
+		ranges.push_back(range);
+		vaddr = range_end;
 	}
-	return OK;
+	return UnmapMemoryRanges(ranges);
 }
 
 size_t KYTY_SYSV_ABI KernelGetDirectMemorySize() {

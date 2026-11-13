@@ -77,6 +77,7 @@ uint64_t EnvironmentMask() {
 	set("KYTY_GPU_COLOR_CLEAR", GpuColorClear, true);
 	set("KYTY_POOLED_BDA_BUFFERS", PooledBdaBuffers, false);
 	set("KYTY_ASYNC_GUEST_READS", AsyncGuestReads, true);
+	set("KYTY_ASYNC_READ_DONE_SYNC", AsyncReadDoneSync, false);
 	set("KYTY_BDA_DIRTY_REGIONS", BdaDirtyRegions, true);
 	// On again: the match-start hang it was suspected of was the label readback race
 	// (WriteDataBuffer), and it cuts the execution thread's readback waits to ~20 ms/s.

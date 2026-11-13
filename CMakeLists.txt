@@ -469,6 +469,11 @@ function(add_kyty_full_emulator_test target source)
 	if (WIN32)
 		target_link_libraries(${target} iphlpapi)
 	endif()
+	if (MSVC)
+		# The GPU harness overflowed the default 1 MiB main-thread stack in CheckComparisonDepthTexture
+		# (0xC00000FD) on Windows.
+		target_link_options(${target} PRIVATE "/STACK:67108864")
+	endif()
 	if (KYTY_CLANG_CL)
 		target_link_libraries(${target} onecore)
 		add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" $<TARGET_FILE_DIR:${target}>/libwinpthread-1.dll)
@@ -544,6 +549,16 @@ add_executable(bit_array_tests EXCLUDE_FROM_ALL
 )
 target_include_directories(bit_array_tests PRIVATE ${inc_headers})
 
+add_executable(spin_wait_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/SpinWaitTests.cpp"
+)
+target_include_directories(spin_wait_tests PRIVATE ${inc_headers})
+
+add_executable(readback_window_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/ReadbackWindowTests.cpp"
+)
+target_include_directories(readback_window_tests PRIVATE ${inc_headers})
+
 add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/LruCacheTests.cpp"
 )
@@ -571,6 +586,8 @@ add_executable(experiments_tests EXCLUDE_FROM_ALL
 	"${KYTY_SOURCE_DIR}/common/threads.cpp"
 )
 target_include_directories(experiments_tests PRIVATE "${KYTY_SOURCE_DIR}")
+# emulatorConfig.cpp and threads.cpp use EXIT and fmt (assert.cpp is in common).
+target_link_libraries(experiments_tests PRIVATE fmt::fmt common)
 if(LINUX OR APPLE)
 	target_link_libraries(experiments_tests PRIVATE Threads::Threads)
 endif()
@@ -808,6 +825,9 @@ if(BUILD_TESTING)
 	add_test(NAME avplayer_file COMMAND $<TARGET_FILE:avplayer_file_tests>)
 	add_test(NAME vdecsw COMMAND $<TARGET_FILE:vdecsw_tests>)
 	add_test(NAME bit_array COMMAND $<TARGET_FILE:bit_array_tests>)
+	add_test(NAME spin_wait COMMAND $<TARGET_FILE:spin_wait_tests>)
+	add_test(NAME spin_wait_no_yield COMMAND $<TARGET_FILE:spin_wait_tests> --no-yield)
+	add_test(NAME readback_window COMMAND $<TARGET_FILE:readback_window_tests>)
 	add_test(NAME lru_cache COMMAND $<TARGET_FILE:lru_cache_tests>)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)

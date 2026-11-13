@@ -2136,6 +2136,49 @@ void TestMunmapAcrossAdjacentFlexibleMappings() {
 	std::printf("[host]    %-48s ok\n", test);
 }
 
+// From upstream d384084e, adapted: rc6 keeps reserved fragments inside a GPU run, so the whole span is one
+// GPU unmap; a failing owner restores the GPU mapping of its fragment and every later committed one.
+void TestMunmapGpuRuns() {
+	using namespace Libs::LibKernel::Memory;
+	const char*        test     = "MunmapGpuRuns";
+	constexpr uint64_t page     = SceKernelPageSize;
+	const auto         baseline = AvailableFlexibleMemory(test);
+	void*              reserve  = nullptr;
+	CheckOk(test, KernelReserveVirtualRange(&reserve, 4 * page, 0, page), "KernelReserveVirtualRange");
+	const auto base = reinterpret_cast<uint64_t>(reserve);
+	struct Piece {
+		uint64_t    offset;
+		int         prot;
+		const char* name;
+	};
+	for (const Piece& piece: {Piece {0 * page, SceKernelProtCpuRw, "run_a"}, Piece {2 * page, SceKernelProtCpuRw, "run_b"},
+	                          Piece {3 * page, SceKernelProtCpuRead, "run_c"}}) {
+		void* address = reinterpret_cast<void*>(base + piece.offset);
+		CheckOk(test, KernelMapNamedFlexibleMemory(&address, page, piece.prot, SceKernelMapFixed, piece.name),
+		        "KernelMapNamedFlexibleMemory");
+	}
+	g_gpu_range_events.clear();
+	TestSetGpuRangeCallback(ObserveGpuRange);
+	TestFailGuestBackingStoreUnmapAfter(1);
+	const int result = KernelMunmap(base, 4 * page);
+	TestSetGpuRangeCallback(nullptr);
+	CheckFailed(test, result, "KernelMunmap(third range fails)");
+	Check(test,
+	      g_gpu_range_events == std::vector<GpuRangeEvent> {{false, base, 4 * page},
+	                                                        {true, base + 2 * page, page},
+	                                                        {true, base + 3 * page, page}},
+	      "munmap did not unmap the span once or restore every surviving range");
+	ExpectUnmapped(test, base);
+	ExpectUnmapped(test, base + page);
+	ExpectRange(test, Query(test, base + 2 * page), base + 2 * page, base + 3 * page, SceKernelProtCpuRw, 1, 0, 0,
+	            1, "run_b");
+	ExpectRange(test, Query(test, base + 3 * page), base + 3 * page, base + 4 * page, SceKernelProtCpuRead, 1, 0,
+	            0, 1, "run_c");
+	CheckOk(test, KernelMunmap(base + 2 * page, 2 * page), "KernelMunmap(surviving ranges)");
+	Check(test, AvailableFlexibleMemory(test) == baseline, "munmap leaked flexible-memory budget");
+	std::printf("[host]    %-48s ok\n", test);
+}
+
 void TestNonzeroDirectOffsetAliasesSharedBacking() {
 	const char* test = "NonzeroDirectOffsetAliasesSharedBacking";
 
@@ -3048,6 +3091,11 @@ void TestAutomaticMemoryReuseAndAliases() {
 	          Libs::LibKernel::KERNEL_ERROR_EAGAIN,
 	      "restored mappings remained available to the automatic allocator");
 	TestFailPhysicalMemoryUnmapAfter(0);
+	// d384084e: a fragment trimmed at its start keeps the right Direct backing offset on rollback.
+	CheckFailed(test, UnmapAmmMemory(base + page, page * 3), "AMM unmap inside a range failure");
+	Check(test, *reinterpret_cast<uint64_t*>(base + page * 3) == 0x0123456789abcdefull,
+	      "failed AMM unmap inside a range restored the wrong backing");
+	TestFailPhysicalMemoryUnmapAfter(0);
 	g_gpu_range_events.clear();
 	TestSetGpuRangeCallback(ObserveGpuRange);
 	const int unmap_result = UnmapAmmMemory(base - page, block + page * 2);
@@ -3155,7 +3203,7 @@ void TestAutomaticMemoryFragmentedMapRollback() {
 	ExpectUnmapped(test, base);
 	Check(test, Query(test, base + block).offset == static_cast<uint64_t>(second) &&
 	                g_gpu_range_events == std::vector<GpuRangeEvent>{
-	                    {false, base, block}, {false, base + block, block}, {true, base + block, block}},
+	                    {false, base, block * 2}, {true, base + block, block}},
 	      "failed strict unmap restored a freed prefix or lost the surviving GPU range");
 	CheckOk(test, KernelCheckedReleaseDirectMemory(first, block), "release first donation");
 	CheckOk(test, KernelCheckedReleaseDirectMemory(gap, block), "release ordinary allocation");
@@ -4950,6 +4998,7 @@ int main(int argc, char** argv) {
 	RunTest(TestFixedNoOverwriteRejectsReservedRange);
 	RunTest(TestReleasedReserveCanBeReused);
 	RunTest(TestMunmapAcrossAdjacentFlexibleMappings);
+	RunTest(TestMunmapGpuRuns);
 	RunTest(TestDirectMapQueryOffsetAndPartialMunmap);
 	RunTest(TestDirectPartialProtectUnmapPreservesNeighbors);
 	RunTest(TestFixedArenaChurnKeepsRangesExact);

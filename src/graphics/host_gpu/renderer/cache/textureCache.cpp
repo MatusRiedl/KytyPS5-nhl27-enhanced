@@ -58,6 +58,30 @@ namespace {
 	return enabled;
 }
 
+[[nodiscard]] bool StencilOwnPlane() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_STENCIL_OWN_PLANE");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
+[[nodiscard]] bool HtileOwnerRule() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_HTILE_OWNER");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
+[[nodiscard]] bool TextureGcFreeBudget() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_TEXTURE_GC_BUDGET");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 // Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
 constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
@@ -437,7 +461,13 @@ void TextureCache::DeleteImage(ImageId id) {
 	}
 	m_download_images.erase(id);
 	if (image->info.metadata.kind == ImageMetadataKind::Htile) {
-		m_surface_metas.erase(image->info.metadata.range.address);
+		// KYTY_HTILE_OWNER=1 (upstream 2d84e36b): only the last image to acquire an HTile range releases its
+		// clear state, so freeing a superseded image does not drop the live depth target's. Off: as in RC5.
+		const auto metadata = m_surface_metas.find(image->info.metadata.range.address);
+		if (metadata != m_surface_metas.end() &&
+		    (!(m_htile_owner_rule || HtileOwnerRule()) || metadata->second.owner == id)) {
+			m_surface_metas.erase(metadata);
+		}
 	}
 	UnregisterImage(id);
 	if (m_scheduler.Active()) {
@@ -1838,6 +1868,16 @@ void TextureCache::RefreshImage(ImageId id) {
 	InitializeImage(id);
 }
 
+ImageId TextureCache::FindStencilPlane(const Image& depth, GuestRange range) const {
+	for (const auto id: depth.stencil_ids) {
+		const auto* plane = m_slot_images.try_get(id);
+		if (plane != nullptr && plane->info.data == range) {
+			return id;
+		}
+	}
+	return {};
+}
+
 ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 	if (!stencil.Valid()) {
 		EXIT("TextureCache: invalid stencil association range\n");
@@ -1847,12 +1887,18 @@ ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 		EXIT("TextureCache: stencil association requires a depth/stencil image\n");
 	}
 
-	ImageId association {};
-	for (const auto id: FindImagesInRegion(stencil.address, stencil.size, false)) {
-		const auto owner = m_slot_images.try_get(id);
-		if (owner != nullptr && owner->info.data == stencil &&
-		    owner->info.extent == depth.info.extent) {
-			association = id;
+	// KYTY_STENCIL_OWN_PLANE=1 (upstream 84419aef): the depth's own plane record wins, so another image at
+	// the same range is not adopted (and two depths sharing a stencil address do not take it from each other).
+	// Off: the last image in the range with the same range and extent wins, as in RC5.
+	ImageId association =
+	    m_stencil_own_plane || StencilOwnPlane() ? FindStencilPlane(depth, stencil) : ImageId {};
+	if (!association) {
+		for (const auto id: FindImagesInRegion(stencil.address, stencil.size, false)) {
+			const auto owner = m_slot_images.try_get(id);
+			if (owner != nullptr && owner->info.data == stencil &&
+			    owner->info.extent == depth.info.extent) {
+				association = id;
+			}
 		}
 	}
 	if (!association) {
@@ -2229,14 +2275,10 @@ vk::ImageView TextureCache::FindTexture(ImageId id, const ImageDesc& desc) {
 		if (image.info.HasStencil() &&
 		    desc.info.data.address >= image.info.stencil.address &&
 		    desc.info.data.End() <= image.info.stencil.End()) {
-			for (const auto stencil_id:
-			     FindImagesInRegion(image.info.stencil.address, image.info.stencil.size, false)) {
-				const auto* stencil = m_slot_images.try_get(stencil_id);
-				if (stencil != nullptr && stencil->depth_id == id &&
-				    stencil->info.data == image.info.stencil) {
-					RefreshImage(stencil_id);
-					break;
-				}
+			// A plane record with depth_id == id is in image.stencil_ids (AssociateStencil and the delete
+			// path keep both in step), so the region scan is not needed (upstream 84419aef).
+			if (const auto stencil_id = FindStencilPlane(image, image.info.stencil)) {
+				RefreshImage(stencil_id);
 			}
 		}
 	}
@@ -2324,6 +2366,7 @@ vk::ImageView TextureCache::FindDepthTarget(ImageId id, const ImageDesc& desc, I
 		if (inserted && image.info.htile_initial_clear) {
 			metadata->second.clear_mask.set();
 		}
+		metadata->second.owner = id;
 	}
 	RefreshImage(id);
 	CommitGpuWrite(image);
@@ -2903,19 +2946,26 @@ void TextureCache::RunGarbageCollector() {
 		// and recreated.
 		const uint64_t age = std::min<uint64_t>(aggressive ? 80 : pressured ? 256 : 1024, tick);
 		size_t         deletions = aggressive ? 40 : pressured ? 20 : 10;
+		// KYTY_TEXTURE_GC_BUDGET=1 (from upstream 16a7bbe3): only a freed image uses up the pass's budget,
+		// so kept images (stencil planes, heap-resident, GPU-written) do not end the pass before anything
+		// is freed. The scan is capped at 4x the budget, since the collector runs on every guest submission.
+		const bool           free_budget = (m_gc_free_budget || TextureGcFreeBudget());
+		const size_t         scan_limit  = free_budget ? deletions * 4 : deletions;
 		std::vector<ImageId> candidates;
-		candidates.reserve(deletions);
+		candidates.reserve(scan_limit);
 		// Deleting depth recursively deletes its stencil association, so finish LRU traversal
 		// first.
 		m_lru_cache.ForEachItemBelow(tick - age, [&](ImageId id) {
 			candidates.push_back(id);
-			return candidates.size() == deletions;
+			return candidates.size() == scan_limit;
 		});
 		for (const auto id: candidates) {
 			if (deletions == 0) {
 				break;
 			}
-			--deletions;
+			if (!free_budget) {
+				--deletions;
+			}
 			auto owner = m_slot_images.try_get(id);
 			if (owner == nullptr || !owner->registered) {
 				continue;
@@ -2950,6 +3000,9 @@ void TextureCache::RunGarbageCollector() {
 				}
 			}
 			BufferCache::PerfCount(BufferCache::PerfEvent::ImageGcFree);
+			if (free_budget) {
+				--deletions;
+			}
 			FreeImage(id);
 			Common::DebugCounters::Add(Common::DebugCounters::Counter::TextureEvictions);
 			if (m_total_used_memory < m_critical_gc_memory && aggressive) {
