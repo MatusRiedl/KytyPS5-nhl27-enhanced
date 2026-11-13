@@ -246,6 +246,8 @@ private:
 	void RefreshCopySource(ImageId id);
 	[[nodiscard]] bool CopyD16(Image& destination, Image& source);
 	void               CopyImage(ImageId destination, ImageId source);
+	// The depth image's stencil plane record covering exactly range, or none.
+	[[nodiscard]] ImageId FindStencilPlane(const Image& depth, GuestRange range) const;
 	[[nodiscard]] ImageId AssociateStencil(ImageId depth, GuestRange stencil);
 	void CopyImageMip(ImageId destination, ImageId source, uint32_t mip, uint32_t layer);
 	// Validates the view and binding of a description; ImageOps::Validate() checks its image
@@ -313,6 +315,7 @@ private:
 	uint64_t         m_gc_tick                = 0;
 	mutable uint32_t m_image_query_epoch      = 0;
 	uint64_t         m_image_set_epoch        = 0;
+	bool             m_stencil_own_plane      = false; // tests; KYTY_STENCIL_OWN_PLANE=1 in the game
 	bool             m_readback_linear_images = false;
 	// Set while an overlap/alias resolution frees an image; only those frees write back.
 	bool             m_alias_free_in_progress = false;

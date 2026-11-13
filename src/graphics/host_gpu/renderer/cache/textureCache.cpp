@@ -58,6 +58,14 @@ namespace {
 	return enabled;
 }
 
+[[nodiscard]] bool StencilOwnPlane() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_STENCIL_OWN_PLANE");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 // Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
 constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
@@ -1838,6 +1846,16 @@ void TextureCache::RefreshImage(ImageId id) {
 	InitializeImage(id);
 }
 
+ImageId TextureCache::FindStencilPlane(const Image& depth, GuestRange range) const {
+	for (const auto id: depth.stencil_ids) {
+		const auto* plane = m_slot_images.try_get(id);
+		if (plane != nullptr && plane->info.data == range) {
+			return id;
+		}
+	}
+	return {};
+}
+
 ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 	if (!stencil.Valid()) {
 		EXIT("TextureCache: invalid stencil association range\n");
@@ -1847,12 +1865,18 @@ ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 		EXIT("TextureCache: stencil association requires a depth/stencil image\n");
 	}
 
-	ImageId association {};
-	for (const auto id: FindImagesInRegion(stencil.address, stencil.size, false)) {
-		const auto owner = m_slot_images.try_get(id);
-		if (owner != nullptr && owner->info.data == stencil &&
-		    owner->info.extent == depth.info.extent) {
-			association = id;
+	// KYTY_STENCIL_OWN_PLANE=1 (upstream 84419aef): the depth's own plane record wins, so another image at
+	// the same range is not adopted (and two depths sharing a stencil address do not take it from each other).
+	// Off: the last image in the range with the same range and extent wins, as in RC5.
+	ImageId association =
+	    m_stencil_own_plane || StencilOwnPlane() ? FindStencilPlane(depth, stencil) : ImageId {};
+	if (!association) {
+		for (const auto id: FindImagesInRegion(stencil.address, stencil.size, false)) {
+			const auto owner = m_slot_images.try_get(id);
+			if (owner != nullptr && owner->info.data == stencil &&
+			    owner->info.extent == depth.info.extent) {
+				association = id;
+			}
 		}
 	}
 	if (!association) {
@@ -2229,14 +2253,10 @@ vk::ImageView TextureCache::FindTexture(ImageId id, const ImageDesc& desc) {
 		if (image.info.HasStencil() &&
 		    desc.info.data.address >= image.info.stencil.address &&
 		    desc.info.data.End() <= image.info.stencil.End()) {
-			for (const auto stencil_id:
-			     FindImagesInRegion(image.info.stencil.address, image.info.stencil.size, false)) {
-				const auto* stencil = m_slot_images.try_get(stencil_id);
-				if (stencil != nullptr && stencil->depth_id == id &&
-				    stencil->info.data == image.info.stencil) {
-					RefreshImage(stencil_id);
-					break;
-				}
+			// A plane record with depth_id == id is in image.stencil_ids (AssociateStencil and the delete
+			// path keep both in step), so the region scan is not needed (upstream 84419aef).
+			if (const auto stencil_id = FindStencilPlane(image, image.info.stencil)) {
+				RefreshImage(stencil_id);
 			}
 		}
 	}
