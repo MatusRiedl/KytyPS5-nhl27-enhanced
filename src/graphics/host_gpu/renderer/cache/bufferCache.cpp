@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/cache/bufferCache.h"
+#include "graphics/host_gpu/renderer/cache/readbackWindow.h"
 #include "graphics/host_gpu/pageWriteSeq.h"
 #include "common/experiments.h"
 
@@ -50,6 +51,20 @@ constexpr uint64_t GdsBufferSize = 64 * 1024;
 bool EnvFlag(const char* name) {
 	const char* setting = std::getenv(name);
 	return setting != nullptr && setting[0] == '1';
+}
+
+// KYTY_READBACK_WINDOW_KIB: read-back window in KiB, a power of two from 16 to 4096; anything else is off.
+uint64_t ReadbackWindowBytes() {
+	static const uint64_t bytes = [] {
+		const char* value = std::getenv("KYTY_READBACK_WINDOW_KIB");
+		const auto  kib   = value != nullptr ? std::strtoull(value, nullptr, 10) : 0ull;
+		const bool  valid = kib >= 16 && kib <= 4096 && (kib & (kib - 1)) == 0;
+		if (valid) {
+			std::printf("NHL27READWIN kib=%llu\n", static_cast<unsigned long long>(kib));
+		}
+		return valid ? kib * 1024 : 0ull;
+	}();
+	return bytes;
 }
 
 // KYTY_PERF_STATS=1: count synchronous GPU->CPU readbacks (ReadMemory -> DownloadBufferMemory).
@@ -1899,11 +1914,22 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 			if (split && attempt == 0) {
 				trace.writer_done = buffer.last_write_tick == 0 || m_scheduler.IsFree(buffer.last_write_tick);
 			}
+			// KYTY_READBACK_WINDOW_KIB=<n> (upstream 1d5c8787 uses 512; default 0 = off): a read of
+			// GPU-written bytes widens to the aligned n KiB window of its buffer, on the asynchronous guest
+			// path and the synchronous one. GPU-written ranges come as many small scattered islands, so one
+			// download takes the neighbours a later read would fault on. Only GPU-written bytes are copied
+			// either way; the cost is waiting for more writers.
+			uint64_t read_vaddr = vaddr;
+			uint64_t read_size  = size;
+			if (!is_write && ReadbackWindowBytes() != 0) {
+				WidenReadback(buffer.CpuAddress(), buffer.Size(), ReadbackWindowBytes(),
+				              m_gpu_modified_ranges.Intersects(vaddr, size), read_vaddr, read_size);
+			}
 			if (!is_write && !on_gpu && Common::Experiments::Enabled(Common::Experiments::AsyncGuestReads)) {
 				// The download covers whole tracker pages; so does the pending record. The bytes it
 				// carries are the GPU-written ones of those pages.
-				const auto first = vaddr & ~(TRACKER_PAGE_SIZE - 1);
-				const auto last  = (vaddr + size + TRACKER_PAGE_SIZE - 1) & ~(TRACKER_PAGE_SIZE - 1);
+				const auto first = read_vaddr & ~(TRACKER_PAGE_SIZE - 1);
+				const auto last  = (read_vaddr + read_size + TRACKER_PAGE_SIZE - 1) & ~(TRACKER_PAGE_SIZE - 1);
 				std::vector<std::pair<uint64_t, uint64_t>> bytes;
 				m_gpu_modified_ranges.ForEachInRange(first, last - first,
 				                                     [&](uint64_t begin, uint64_t end) { bytes.emplace_back(begin, end); });
@@ -1917,7 +1943,7 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 				}
 				const bool async_downloaded = [&] {
 					RdSplitSpan span(trace, RdCopy, split);
-					return DownloadBufferMemory<true>(buffer, vaddr, size);
+					return DownloadBufferMemory<true>(buffer, read_vaddr, read_size);
 				}();
 				if (async_downloaded) {
 					trace.downloaded = true;
@@ -2004,6 +2030,10 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write, ReadC
 					download_vaddr = begin;
 					download_size  = end - begin;
 				}
+			}
+			if (!is_write && read_vaddr != vaddr) {
+				download_vaddr = read_vaddr;
+				download_size  = read_size;
 			}
 			if (!lazy && !on_gpu && attempt < 4 && buffer.last_write_tick != 0 &&
 			    !Common::Experiments::Enabled(Common::Experiments::AbPending3) &&

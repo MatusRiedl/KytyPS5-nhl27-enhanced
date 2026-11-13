@@ -549,6 +549,11 @@ add_executable(spin_wait_tests EXCLUDE_FROM_ALL
 )
 target_include_directories(spin_wait_tests PRIVATE ${inc_headers})
 
+add_executable(readback_window_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/ReadbackWindowTests.cpp"
+)
+target_include_directories(readback_window_tests PRIVATE ${inc_headers})
+
 add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/LruCacheTests.cpp"
 )
@@ -815,6 +820,7 @@ if(BUILD_TESTING)
 	add_test(NAME bit_array COMMAND $<TARGET_FILE:bit_array_tests>)
 	add_test(NAME spin_wait COMMAND $<TARGET_FILE:spin_wait_tests>)
 	add_test(NAME spin_wait_no_yield COMMAND $<TARGET_FILE:spin_wait_tests> --no-yield)
+	add_test(NAME readback_window COMMAND $<TARGET_FILE:readback_window_tests>)
 	add_test(NAME lru_cache COMMAND $<TARGET_FILE:lru_cache_tests>)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)
