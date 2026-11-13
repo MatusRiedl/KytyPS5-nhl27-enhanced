@@ -1,9 +1,32 @@
-# KytyPS5-nhl27-enhanced RC5
+# Faceoff v0.10.0 (KytyPS5-nhl27-enhanced)
 
 A build of duy64/KytyPS5-nhl (release a917829, branch `opt/nhl27-fixes`) for NHL 27 (PPSA34063, tested with
-game version 01.003.001). It holds menus at 30 fps and play at 60 fps, and fixes two Be a Pro bugs.
+game version 01.003.001), with the Faceoff launcher. It holds menus at 30 fps and play at 60 fps.
 
 This is a test build. No game files are included: you need your own dump of the game.
+
+## New in v0.10.0
+
+The project is now called **Faceoff**, and releases are numbered from v0.10.0 (this one is the former RC6).
+
+- **Smoother play.** Memory faults are handled in larger batches, unmapped GPU-written memory is dropped instead of
+  copied back, and the page-tracking locks give up the CPU instead of spinning. Played with a controller before
+  release; not yet measured against RC5 on the same match.
+- **Fixes from KytyPS5**, each with its original author: texture views past the last mip end cleanly instead of
+  closing the emulator, a depth image keeps its own stencil record, and freed memory is unmapped from the GPU one run
+  at a time (nmzik); a depth target keeps its HTile clear state (TheCruZ).
+- **Settings on by default** (in `builds/rc6/cfgGlobal.json`, remove a line to turn one off): `KYTY_FAULT_COALESCE_PAGES`,
+  `KYTY_UNMAP_DISCARD`, `KYTY_STENCIL_OWN_PLANE`, `KYTY_HTILE_OWNER`, `KYTY_SPIN_YIELD`.
+- **Diagnostics**, only with `KYTY_PERF_STATS=1`: draw-preparation timing (`NHL27DRAWPROF`, duy64), read-fault
+  breakdown (`NHL27RDSPLIT`).
+- **New Faceoff look**, shared with the other Puck Peak apps: app dock at the top left, Play at the top right, check
+  marks for game, emulator and shader cache, and a status bar with download progress.
+- **Updating from RC5:** the auto-update installs the new emulator build and keeps your saves and shader cache. The
+  launcher itself is now numbered 0.10.0, which RC5's launcher reads as older, so take `Faceoff.exe` from the zip once
+  by hand.
+
+Known: shadows can look blocky in places (seen in earlier builds too), and a cut from one cutscene to the next can
+stutter.
 
 ## New in RC5
 
@@ -43,7 +66,7 @@ This is a test build. No game files are included: you need your own dump of the 
 ## How to use
 
 1. Check the requirements below.
-2. **Coming from RC3 or RC4:** extract RC5 into your old folder and let it overwrite. On the first start Faceoff moves
+2. **Coming from RC3, RC4 or RC5:** extract v0.10.0 into your old folder and let it overwrite. On the first start Faceoff moves
    the old build into `buildsc3` or `buildsc4`, so your saves, shader cache and game folder stay. **New install:**
    extract it anywhere you can write to, with at least 2 GB free. It should not be inside `Program Files`.
 3. Double-click `Faceoff.exe`, the launcher: pick the game folder and the build, change resolution, display and render
