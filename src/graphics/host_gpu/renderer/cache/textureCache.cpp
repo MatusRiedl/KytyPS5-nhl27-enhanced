@@ -66,6 +66,14 @@ namespace {
 	return enabled;
 }
 
+[[nodiscard]] bool HtileOwnerRule() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_HTILE_OWNER");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 // Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
 constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
@@ -445,7 +453,13 @@ void TextureCache::DeleteImage(ImageId id) {
 	}
 	m_download_images.erase(id);
 	if (image->info.metadata.kind == ImageMetadataKind::Htile) {
-		m_surface_metas.erase(image->info.metadata.range.address);
+		// KYTY_HTILE_OWNER=1 (upstream 2d84e36b): only the last image to acquire an HTile range releases its
+		// clear state, so freeing a superseded image does not drop the live depth target's. Off: as in RC5.
+		const auto metadata = m_surface_metas.find(image->info.metadata.range.address);
+		if (metadata != m_surface_metas.end() &&
+		    (!(m_htile_owner_rule || HtileOwnerRule()) || metadata->second.owner == id)) {
+			m_surface_metas.erase(metadata);
+		}
 	}
 	UnregisterImage(id);
 	if (m_scheduler.Active()) {
@@ -2344,6 +2358,7 @@ vk::ImageView TextureCache::FindDepthTarget(ImageId id, const ImageDesc& desc, I
 		if (inserted && image.info.htile_initial_clear) {
 			metadata->second.clear_mask.set();
 		}
+		metadata->second.owner = id;
 	}
 	RefreshImage(id);
 	CommitGpuWrite(image);

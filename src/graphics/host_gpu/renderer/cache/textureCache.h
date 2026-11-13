@@ -158,6 +158,8 @@ private:
 	struct MetaDataInfo {
 		// PS5 DB_DEPTH_VIEW encodes 13-bit base and last array-slice indices.
 		std::bitset<8192> clear_mask;
+		// The depth image that last acquired this HTile range.
+		ImageId owner;
 	};
 
 	struct OverlapResult {
@@ -316,6 +318,7 @@ private:
 	mutable uint32_t m_image_query_epoch      = 0;
 	uint64_t         m_image_set_epoch        = 0;
 	bool             m_stencil_own_plane      = false; // tests; KYTY_STENCIL_OWN_PLANE=1 in the game
+	bool             m_htile_owner_rule       = false; // tests; KYTY_HTILE_OWNER=1 in the game
 	bool             m_readback_linear_images = false;
 	// Set while an overlap/alias resolution frees an image; only those frees write back.
 	bool             m_alias_free_in_progress = false;

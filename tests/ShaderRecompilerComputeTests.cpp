@@ -418,6 +418,12 @@ struct TextureCacheTestAccess {
     cache.DeleteImage(id);
   }
 
+  // The garbage collector's release path: drops GPU-modified state, then deletes.
+  static void FreeImage(TextureCache &cache, ImageId id) {
+    std::lock_guard lock(cache.m_lock);
+    cache.FreeImage(id);
+  }
+
   static const Image *Owner(const TextureCache &cache, ImageId id) {
     return cache.m_slot_images.try_get(id);
   }
@@ -443,6 +449,10 @@ struct TextureCacheTestAccess {
 
   static void SetStencilOwnPlane(TextureCache &cache, bool enabled) {
     cache.m_stencil_own_plane = enabled;
+  }
+
+  static void SetHtileOwnerRule(TextureCache &cache, bool enabled) {
+    cache.m_htile_owner_rule = enabled;
   }
 
   static std::pair<uint8_t *, uint64_t>
@@ -8841,6 +8851,54 @@ public:
           name, "metadata buffer fill state",
           texture_cache.IsMetaCleared(base + metadata_b, 0),
           "BufferCache fill did not publish an exact-address metadata clear");
+
+      // Upstream 2d84e36b, behind KYTY_HTILE_OWNER: a dynamic-resolution depth
+      // target keeps its HTile range at every extent; freeing the superseded
+      // image must leave its successor's consumed clear state alone.
+      {
+        TextureCacheTestAccess::SetHtileOwnerRule(texture_cache, true);
+        constexpr uint64_t shared_htile = 0x13200;
+        auto retired_depth = MakeMetadataDepth(0x12400, shared_htile);
+        auto live_depth = MakeMetadataDepth(0x12500, shared_htile);
+        const auto retired_id = texture_cache.FindImage(retired_depth);
+        const auto live_id = texture_cache.FindImage(live_depth);
+        (void)texture_cache.FindDepthTarget(retired_id, retired_depth);
+        (void)texture_cache.FindDepthTarget(live_id, live_depth);
+        const bool live_consumed =
+            texture_cache.TouchMeta(base + shared_htile, 0, false);
+        TextureCacheTestAccess::FreeImage(texture_cache, retired_id);
+        (void)texture_cache.FindDepthTarget(live_id, live_depth);
+        Require(name, "superseded HTile image release",
+                live_consumed &&
+                    !texture_cache.IsMetaCleared(base + shared_htile, 0),
+                "freeing a superseded depth image re-armed its successor's "
+                "HTile clear");
+        TextureCacheTestAccess::FreeImage(texture_cache, live_id);
+        Require(name, "HTile owner release",
+                !texture_cache.IsMeta(base + shared_htile),
+                "freeing the HTile owner kept its clear state");
+        TextureCacheTestAccess::SetHtileOwnerRule(texture_cache, false);
+
+        // Control, switch off (RC5 rule): the same sequence re-arms or drops
+        // the successor's state, so the check above discriminates.
+        constexpr uint64_t control_htile = 0x13600;
+        auto control_retired = MakeMetadataDepth(0x12600, control_htile);
+        auto control_live = MakeMetadataDepth(0x12700, control_htile);
+        const auto control_retired_id = texture_cache.FindImage(control_retired);
+        const auto control_live_id = texture_cache.FindImage(control_live);
+        (void)texture_cache.FindDepthTarget(control_retired_id, control_retired);
+        (void)texture_cache.FindDepthTarget(control_live_id, control_live);
+        const bool control_consumed =
+            texture_cache.TouchMeta(base + control_htile, 0, false);
+        TextureCacheTestAccess::FreeImage(texture_cache, control_retired_id);
+        Require(name, "HTile release control (switch off)",
+                control_consumed &&
+                    !texture_cache.IsMeta(base + control_htile),
+                "with KYTY_HTILE_OWNER off, freeing the superseded image "
+                "no longer drops the shared HTile state; the owner test "
+                "does not discriminate");
+        TextureCacheTestAccess::FreeImage(texture_cache, control_live_id);
+      }
 
       // R-Type Final 3 reuses an old color allocation inside a new stencil plane,
       // with the same metadata address changing from DCC to HTile.
