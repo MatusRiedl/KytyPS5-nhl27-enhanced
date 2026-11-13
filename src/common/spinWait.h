@@ -4,7 +4,8 @@
 // Bounded spinning for the page-tracking spin locks.
 // A waiter pauses for a while, then gives up its time slice, so a lock holder that lost its CPU can run again
 // instead of every waiter burning a core until the scheduler returns to it. Uncontended locking is unchanged.
-// KYTY_SPIN_YIELD=0 at startup restores the old pause-only loops.
+// Opt-in: KYTY_SPIN_YIELD=1 at startup enables the yield. Unset or any other value keeps the old pause-only loops,
+// since yielding changes timing and the collapse it targets is not proven to come from these locks.
 
 #include <atomic>
 #include <cstdint>
@@ -24,7 +25,7 @@ inline constexpr uint32_t SpinsBeforeYield = 2048;
 inline bool YieldEnabled() noexcept {
 	static const bool enabled = [] {
 		const char* value = std::getenv("KYTY_SPIN_YIELD");
-		return value == nullptr || value[0] != '0';
+		return value != nullptr && value[0] == '1';
 	}();
 	return enabled;
 }
